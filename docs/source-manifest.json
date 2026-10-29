@@ -1,0 +1,301 @@
+{
+  "schema": 1,
+  "repository": "https://github.com/sgl-project/sglang",
+  "reviewed": "2026-10-29",
+  "scope": "Static source evidence only; not GPU execution or performance validation.",
+  "files": [
+    {
+      "revision": "279339f113b79af84f27fd3ac92d0a13bd3f4cbd",
+      "path": "python/sglang/srt/entrypoints/http_server.py",
+      "sha256": "61c27cd503d0d81fed4988000d99184c0f1362c3873c3fb0acd00506f33a91af",
+      "anchors": [
+        {
+          "line": 911,
+          "text": "async def generate_request"
+        },
+        {
+          "line": 1741,
+          "text": "async def openai_v1_chat_completions"
+        }
+      ]
+    },
+    {
+      "revision": "279339f113b79af84f27fd3ac92d0a13bd3f4cbd",
+      "path": "python/sglang/srt/managers/tokenizer_manager.py",
+      "sha256": "e813b47426921ce1cfe22cb80609e5bb8e9f8b76735e90df65f999d913673336",
+      "anchors": [
+        {
+          "line": 1592,
+          "text": "async def _send_one_request"
+        },
+        {
+          "line": 2255,
+          "text": "async def _handle_batch_output"
+        }
+      ]
+    },
+    {
+      "revision": "279339f113b79af84f27fd3ac92d0a13bd3f4cbd",
+      "path": "python/sglang/srt/managers/scheduler.py",
+      "sha256": "b1ce7fe6d8e843a954bff0d6933d0e7ab97294c9174718ec9ab8ca9f5e501401",
+      "anchors": [
+        {
+          "line": 1907,
+          "text": "def event_loop_normal"
+        },
+        {
+          "line": 615,
+          "text": "self.req_to_token_pool = result.req_to_token_pool"
+        }
+      ]
+    },
+    {
+      "revision": "279339f113b79af84f27fd3ac92d0a13bd3f4cbd",
+      "path": "python/sglang/srt/managers/schedule_batch.py",
+      "sha256": "179666548b89f151398d45ae34a9b676f5a1b42939d180d2c8051cd990807392",
+      "anchors": [
+        {
+          "line": 2678,
+          "text": "def prepare_for_extend"
+        }
+      ]
+    },
+    {
+      "revision": "279339f113b79af84f27fd3ac92d0a13bd3f4cbd",
+      "path": "python/sglang/srt/managers/scheduler_components/batch_result_processor.py",
+      "sha256": "e4fb82ba6bc501f2e8f29a0fc76ce240d1d128210122619c899917433c2b6ddb",
+      "anchors": [
+        {
+          "line": 257,
+          "text": "def process_batch_result_prefill"
+        }
+      ]
+    },
+    {
+      "revision": "279339f113b79af84f27fd3ac92d0a13bd3f4cbd",
+      "path": "python/sglang/srt/managers/tp_worker.py",
+      "sha256": "3fd8496b1d7b122bfc30edf9f31b9529e96903fc0da26b7217beb29054044f12",
+      "anchors": [
+        {
+          "line": 593,
+          "text": "def forward_batch_generation"
+        },
+        {
+          "line": 608,
+          "text": "forward_batch = ForwardBatch.init_new"
+        },
+        {
+          "line": 672,
+          "text": "batch_result.next_token_ids = self.model_runner.sample"
+        }
+      ]
+    },
+    {
+      "revision": "279339f113b79af84f27fd3ac92d0a13bd3f4cbd",
+      "path": "python/sglang/srt/model_executor/model_runner.py",
+      "sha256": "a6c91db3d13f55bf04a9ce691a34aad2af79456b0c3a40e70c86b959cec44c17",
+      "anchors": [
+        {
+          "line": 1636,
+          "text": "def forward"
+        },
+        {
+          "line": 1013,
+          "text": "def init_attention_backends"
+        }
+      ]
+    },
+    {
+      "revision": "279339f113b79af84f27fd3ac92d0a13bd3f4cbd",
+      "path": "python/sglang/srt/mem_cache/radix_cache.py",
+      "sha256": "150818b0a4eaa05171ca2e485698fa455608c13ee6b07f3945ac2095fa294de3",
+      "anchors": [
+        {
+          "line": 397,
+          "text": "def match_prefix"
+        },
+        {
+          "line": 479,
+          "text": "def cache_finished_req("
+        },
+        {
+          "line": 511,
+          "text": "# Radix Cache takes one ref in memory pool"
+        },
+        {
+          "line": 512,
+          "text": "if is_insert:"
+        },
+        {
+          "line": 557,
+          "text": "# Remove req slot release the cache lock"
+        }
+      ]
+    },
+    {
+      "revision": "279339f113b79af84f27fd3ac92d0a13bd3f4cbd",
+      "path": "python/sglang/srt/mem_cache/memory_pool.py",
+      "sha256": "1f58f3b2e22cbcae47d5cd8f87322b7fb041c1d2730833b672af395e268e4650",
+      "anchors": [
+        {
+          "line": 2526,
+          "text": "def set_kv_buffer"
+        }
+      ]
+    },
+    {
+      "revision": "279339f113b79af84f27fd3ac92d0a13bd3f4cbd",
+      "path": "python/sglang/srt/models/deepseek_v2.py",
+      "sha256": "42f56661004423bc031d1c47ae950a92c40de3382dab878d5915b4769138a336",
+      "anchors": [
+        {
+          "line": 3165,
+          "text": "class DeepseekV3ForCausalLM"
+        }
+      ]
+    },
+    {
+      "revision": "279339f113b79af84f27fd3ac92d0a13bd3f4cbd",
+      "path": "python/sglang/srt/layers/radix_attention.py",
+      "sha256": "2956010f919a8b219bdf6ba0263f4b77d8c169af1d9745f0e3dee779e282fb1a",
+      "anchors": [
+        {
+          "line": 157,
+          "text": "def forward"
+        }
+      ]
+    },
+    {
+      "revision": "279339f113b79af84f27fd3ac92d0a13bd3f4cbd",
+      "path": "python/sglang/srt/managers/detokenizer_manager.py",
+      "sha256": "90042a763006dba5a77d2a0e43abe17937ee287abaff13b9bf4b26f28f139bf4",
+      "anchors": [
+        {
+          "line": 443,
+          "text": "def handle_batch_token_id_out"
+        },
+        {
+          "line": 122,
+          "text": "def init_ipc_channels"
+        }
+      ]
+    },
+    {
+      "revision": "94602c9c2b7cbdb8efd5c52802dac6a1c180089e",
+      "path": "python/sglang/srt/managers/scheduler.py",
+      "sha256": "439ee96dd785fbb63a9f139b192cec984c252df16a573a436877f0ef9a4ca045",
+      "anchors": [
+        {
+          "line": 5692,
+          "text": "def dispatch_event_loop"
+        },
+        {
+          "line": 1471,
+          "text": "DisaggregationMode.PREFILL"
+        },
+        {
+          "line": 1509,
+          "text": "DisaggregationMode.DECODE"
+        },
+        {
+          "line": 5697,
+          "text": "scheduler.event_loop_pdmux()"
+        }
+      ],
+      "excludes": [
+        "run_event_loop_supervisor",
+        "PdRoleSwitchReqInput"
+      ]
+    },
+    {
+      "revision": "94602c9c2b7cbdb8efd5c52802dac6a1c180089e",
+      "path": "python/sglang/srt/entrypoints/http_server.py",
+      "sha256": "26b2357b12e382997e7ac3c475505147e2433974bc229c540b31291d6f872ad7",
+      "anchors": [],
+      "excludes": [
+        "/pd_role_switch"
+      ]
+    },
+    {
+      "revision": "e00930c5489053f26d86b179cee0d087f846acbb",
+      "path": "python/sglang/srt/disaggregation/role_switch.py",
+      "sha256": "8c5050741de41e5e6a18e8928582f9e6f1bc908d8782b40507fdd4af33148942",
+      "anchors": [
+        {
+          "line": 29,
+          "text": "def run_event_loop_supervisor("
+        },
+        {
+          "line": 43,
+          "text": "def handle_pd_role_switch("
+        },
+        {
+          "line": 73,
+          "text": "if not scheduler.is_fully_idle():"
+        },
+        {
+          "line": 125,
+          "text": "scheduler._pd_role_switch_unhealthy = True"
+        },
+        {
+          "line": 159,
+          "text": "def _reject_reason("
+        },
+        {
+          "line": 229,
+          "text": "def teardown_disaggregation("
+        },
+        {
+          "line": 282,
+          "text": "tree_cache.reset()"
+        },
+        {
+          "line": 283,
+          "text": "scheduler.req_to_token_pool.clear()"
+        },
+        {
+          "line": 284,
+          "text": "scheduler.token_to_kv_pool_allocator.clear()"
+        }
+      ]
+    },
+    {
+      "revision": "e00930c5489053f26d86b179cee0d087f846acbb",
+      "path": "python/sglang/srt/managers/scheduler.py",
+      "sha256": "b61df5b750adc748a99ceb381b8494c199fb3f704d793da5a0217bd6bbb606c4",
+      "anchors": [
+        {
+          "line": 5932,
+          "text": "def dispatch_event_loop"
+        },
+        {
+          "line": 1472,
+          "text": "DisaggregationMode.PREFILL"
+        },
+        {
+          "line": 1510,
+          "text": "DisaggregationMode.DECODE"
+        },
+        {
+          "line": 5945,
+          "text": "scheduler.event_loop_pdmux()"
+        },
+        {
+          "line": 5934,
+          "text": "return role_switch.run_event_loop_supervisor("
+        }
+      ]
+    },
+    {
+      "revision": "e00930c5489053f26d86b179cee0d087f846acbb",
+      "path": "python/sglang/srt/entrypoints/http_server.py",
+      "sha256": "1fbb46671e86d0ebf23046efa09e8e03d251754e681ba03b818dbb7a75c79c55",
+      "anchors": [
+        {
+          "line": 1577,
+          "text": "@app.api_route(\"/pd_role_switch\""
+        }
+      ]
+    }
+  ]
+}

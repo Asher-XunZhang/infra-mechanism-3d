@@ -1,0 +1,198 @@
+{
+  "repository": "https://github.com/sgl-project/sglang",
+  "revision": "279339f113b79af84f27fd3ac92d0a13bd3f4cbd",
+  "reviewed": "2026-10-29",
+  "scope": "普通 Python 文本生成，单卡合并部署，普通非 overlap 循环；不混入 PD 对比场景。",
+  "nodes": [
+    {
+      "id": "api",
+      "title": "API 接入",
+      "name": "HTTP / OpenAI API",
+      "directory": "entrypoints/",
+      "why": "把客户端协议接到引擎，并把生成结果返回连接。",
+      "action": "HTTP handler 调用 TokenizerManager；原生 /generate 与 OpenAI 兼容入口在接入层适配。本图从已送达实例的文本请求开始。",
+      "sources": [
+        [
+          "python/sglang/srt/entrypoints/http_server.py",
+          911,
+          "async def generate_request"
+        ],
+        [
+          "python/sglang/srt/entrypoints/http_server.py",
+          1741,
+          "async def openai_v1_chat_completions"
+        ]
+      ],
+      "phase": [
+        "input",
+        "output"
+      ]
+    },
+    {
+      "id": "tokenizer",
+      "title": "分词与请求管理",
+      "name": "TokenizerManager",
+      "directory": "managers/tokenizer_manager.py",
+      "why": "模型需要 token ID；返回结果还要找到原来的请求连接。",
+      "action": "将输入组织成 TokenizedGenerateReqInput，带上 rid（请求标识）、token ID 和生成配置派发；保存前端等待状态，接收文字结果后返回对应请求。",
+      "sources": [
+        [
+          "python/sglang/srt/managers/tokenizer_manager.py",
+          1592,
+          "async def _send_one_request"
+        ],
+        [
+          "python/sglang/srt/managers/tokenizer_manager.py",
+          2255,
+          "async def _handle_batch_output"
+        ]
+      ],
+      "phase": [
+        "input",
+        "output"
+      ]
+    },
+    {
+      "id": "scheduler",
+      "title": "调度与结果处理",
+      "name": "Scheduler · ScheduleBatch",
+      "directory": "managers/ · scheduler_components/",
+      "why": "请求不断到来，计算与 KV 容量有限，需要决定本轮接纳谁、执行多少。",
+      "action": "普通 event_loop_normal 接收请求、获取下一批、执行并消费结果。ScheduleBatch 描述当前批次；结果处理更新请求进度与结束状态，再发出输出 token ID。未结束的请求继续参与后续调度。",
+      "sources": [
+        [
+          "python/sglang/srt/managers/scheduler.py",
+          1907,
+          "def event_loop_normal"
+        ],
+        [
+          "python/sglang/srt/managers/schedule_batch.py",
+          2678,
+          "def prepare_for_extend"
+        ],
+        [
+          "python/sglang/srt/managers/scheduler_components/batch_result_processor.py",
+          257,
+          "def process_batch_result_prefill"
+        ]
+      ],
+      "phase": [
+        "input",
+        "compute",
+        "output"
+      ]
+    },
+    {
+      "id": "execution",
+      "title": "执行封装与采样",
+      "name": "TpModelWorker / ModelRunner",
+      "directory": "managers/ · model_executor/",
+      "why": "调度描述本轮做什么；执行层要把它变成模型可用的张量、位置和执行方式。",
+      "action": "TpModelWorker 将 ScheduleBatch 转成 ForwardBatch，调用 ModelRunner.forward；普通生成路径再调用 sample 选择下一 token。ModelRunner 组织模型加载、Attention backend 和执行路径。两者是本图调度进程内的对象。",
+      "sources": [
+        [
+          "python/sglang/srt/managers/tp_worker.py",
+          593,
+          "def forward_batch_generation"
+        ],
+        [
+          "python/sglang/srt/managers/tp_worker.py",
+          608,
+          "forward_batch = ForwardBatch.init_new"
+        ],
+        [
+          "python/sglang/srt/model_executor/model_runner.py",
+          1636,
+          "def forward"
+        ],
+        [
+          "python/sglang/srt/managers/tp_worker.py",
+          672,
+          "batch_result.next_token_ids = self.model_runner.sample"
+        ]
+      ],
+      "phase": [
+        "compute"
+      ]
+    },
+    {
+      "id": "cache",
+      "title": "KV 管理",
+      "name": "前缀缓存 · 地址池 · 分配器",
+      "directory": "mem_cache/",
+      "why": "复用已有历史，并让新 token 有可写位置；请求结束后还要按共享关系回收。",
+      "action": "以 RadixCache 为例，索引匹配可复用前缀；请求到位置的映射与分配器管理写入位置。实际各层 K/V 值存于设备 buffer，由模型计算路径读写。前缀树不是存放全部 KV 张量的独立服务器。",
+      "sources": [
+        [
+          "python/sglang/srt/managers/scheduler.py",
+          615,
+          "self.req_to_token_pool = result.req_to_token_pool"
+        ],
+        [
+          "python/sglang/srt/mem_cache/radix_cache.py",
+          397,
+          "def match_prefix"
+        ],
+        [
+          "python/sglang/srt/mem_cache/memory_pool.py",
+          2526,
+          "def set_kv_buffer"
+        ]
+      ],
+      "phase": [
+        "compute"
+      ]
+    },
+    {
+      "id": "model",
+      "title": "模型与算子",
+      "name": "模型层 → Attention backend",
+      "directory": "models/ · layers/",
+      "why": "执行层需要调用具体的模型结构与适合当前设备的运算实现。",
+      "action": "DeepSeek-V3 用例由 models/deepseek_v2.py 中的 DeepseekV3ForCausalLM 接入。模型层调用 Attention、线性层等，后端再选择具体 kernel（设备计算函数）；层的实现与运行的设备不是两个服务。kernels/ 位于 python/sglang/ 下。",
+      "sources": [
+        [
+          "python/sglang/srt/models/deepseek_v2.py",
+          3165,
+          "class DeepseekV3ForCausalLM"
+        ],
+        [
+          "python/sglang/srt/layers/radix_attention.py",
+          157,
+          "def forward"
+        ],
+        [
+          "python/sglang/srt/model_executor/model_runner.py",
+          1013,
+          "def init_attention_backends"
+        ]
+      ],
+      "phase": [
+        "compute"
+      ]
+    },
+    {
+      "id": "detokenizer",
+      "title": "输出反分词",
+      "name": "DetokenizerManager",
+      "directory": "managers/",
+      "why": "模型选择的是 token ID，客户端需要文字及结束信息。",
+      "action": "DetokenizerManager 接收 BatchTokenIDOutput，结合各请求的增量解码状态生成 BatchStrOutput，发送回 TokenizerManager。这里处理输出；输入分词在入口进程完成。",
+      "sources": [
+        [
+          "python/sglang/srt/managers/detokenizer_manager.py",
+          443,
+          "def handle_batch_token_id_out"
+        ],
+        [
+          "python/sglang/srt/managers/detokenizer_manager.py",
+          122,
+          "def init_ipc_channels"
+        ]
+      ],
+      "phase": [
+        "output"
+      ]
+    }
+  ]
+}

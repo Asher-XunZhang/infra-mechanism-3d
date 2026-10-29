@@ -1,0 +1,32 @@
+{
+  "name": "infra-mechanism-3d",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A reusable 3D mechanism viewer, with SGLang as its first content pack.",
+  "license": "MIT",
+  "author": "Asher-XunZhang",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Asher-XunZhang/infra-mechanism-3d.git"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "npm run typecheck && vite build && vite build --config vite.lib.config.ts",
+    "preview": "vite preview --host 127.0.0.1",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "npm run test && npm run build",
+    "postbuild": "node tools/package-static.mjs"
+  },
+  "dependencies": {
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "@types/three": "0.186.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.7",
+    "vitest": "4.1.12"
+  }
+}

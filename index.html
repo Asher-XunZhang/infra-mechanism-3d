@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="SGLang 固定源码机制阅读器：从普通请求、调度与 GPU 边界，到 v0.5.20 / v0.5.21 的 PD 角色切换并排比较。"
+    />
+    <meta name="theme-color" content="#101e1a" />
+    <title>SGLang 机制图 · Infra Mechanism 3D</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23101e1a'/%3E%3Crect x='4' y='4' width='24' height='24' fill='%23e44c2b'/%3E%3Ctext x='16' y='21' font-family='monospace' font-size='11' font-weight='700' fill='%23fff8ed' text-anchor='middle'%3EIM%3C/text%3E%3C/svg%3E"
+    />
+    <script type="module" src="/src/demo.ts"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#viewer">跳到三维阅读器</a>
+
+    <div class="page-shell">
+      <header class="page-top">
+        <a class="page-brand" href="./" aria-label="基础设施机制图首页">
+          <span class="page-brand__mark" aria-hidden="true">IM</span>
+          <span class="page-brand__name">
+            基础机制图
+            <small>Infra Mechanism 3D</small>
+          </span>
+        </a>
+        <div class="page-top__meta">
+          <span>SGLang / 首个内容包</span>
+          <a
+            href="https://github.com/Asher-XunZhang/infra-mechanism-3d"
+            target="_blank"
+            rel="noopener noreferrer"
+            >源码仓库 ↗</a
+          >
+        </div>
+      </header>
+
+      <main>
+        <section class="page-intro" aria-labelledby="page-title">
+          <div class="page-intro__copy">
+            <p class="page-kicker">
+              <span>固定源码 · 2026-10-29</span>
+              <span>阅读器 01</span>
+            </p>
+            <h1 id="page-title">把推理系统的边界，摊开来看。</h1>
+            <p class="page-lead">
+              从入口、调度进程与 GPU 设备的边界出发，跟完一次请求，再并排比较
+              v0.5.20 与 v0.5.21 的 PD 角色切换。图形状态由可复现场景数据驱动；镜头和播放只是阅读控制。
+            </p>
+            <nav class="reading-route" aria-label="场景入口">
+              <span class="reading-route__label">阅读路径</span>
+              <ol>
+                <li>
+                  <a href="#scene=overview&amp;step=0">
+                    <span>01</span>系统总览
+                  </a>
+                </li>
+                <li>
+                  <a href="#scene=request-flow&amp;step=0">
+                    <span>02</span>请求数据流
+                  </a>
+                </li>
+                <li>
+                  <a href="#scene=pd-compare&amp;case=normal&amp;step=0">
+                    <span>03</span>PD 角色切换
+                  </a>
+                </li>
+              </ol>
+            </nav>
+          </div>
+
+          <aside class="source-ledger" aria-labelledby="source-ledger-title">
+            <div class="source-ledger__head">
+              <span id="source-ledger-title">固定源码基线</span>
+              <span>只读核对</span>
+            </div>
+            <a
+              class="source-ledger__row"
+              href="https://github.com/sgl-project/sglang/tree/279339f113b79af84f27fd3ac92d0a13bd3f4cbd"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <span class="source-ledger__scope">系统总览 / 请求数据流</span>
+              <code>279339f</code>
+              <span class="source-ledger__arrow" aria-hidden="true">↗</span>
+            </a>
+            <a
+              class="source-ledger__row"
+              href="https://github.com/sgl-project/sglang/tree/94602c9c2b7cbdb8efd5c52802dac6a1c180089e"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <span class="source-ledger__scope">PD 对比 / v0.5.20</span>
+              <code>94602c9</code>
+              <span class="source-ledger__arrow" aria-hidden="true">↗</span>
+            </a>
+            <a
+              class="source-ledger__row"
+              href="https://github.com/sgl-project/sglang/tree/e00930c5489053f26d86b179cee0d087f846acbb"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <span class="source-ledger__scope">PD 对比 / v0.5.21</span>
+              <code>e00930c</code>
+              <span class="source-ledger__arrow" aria-hidden="true">↗</span>
+            </a>
+            <p class="source-ledger__note">
+              每个场景固定自己的 commit。旧侧“不可用”只指向本场景的管理 API
+              与 supervisor 路径，旧版仍保留 PD / PDMux。
+            </p>
+          </aside>
+        </section>
+
+        <section class="viewer-frame" aria-label="SGLang 三维机制阅读器">
+          <div
+            id="viewer"
+            class="viewer-mount"
+            data-viewer-mount
+            aria-busy="true"
+          >
+            <div class="viewer-loading" role="status">
+              <span class="viewer-loading__mark" aria-hidden="true">3D</span>
+              <p>正在装配固定源码场景…</p>
+            </div>
+          </div>
+        </section>
+
+        <noscript>
+          <section class="no-script" aria-labelledby="no-script-title">
+            <div>
+              <p class="page-kicker">需要 JavaScript</p>
+              <h2 id="no-script-title">三维场景没有载入，源码基线仍可阅读。</h2>
+            </div>
+            <p>
+              这个页面用 JavaScript 构建可旋转的机制模型和分步阅读。上面的概述、三个场景入口与固定
+              commit 链接不依赖脚本；开启脚本后，可交互的 SGLang 机制图会挂载在页面中。
+            </p>
+          </section>
+        </noscript>
+      </main>
+
+      <footer class="page-foot">
+        <p>只读源码证据 · 非性能实测</p>
+        <p>
+          <a
+            href="https://github.com/sgl-project/sglang"
+            target="_blank"
+            rel="noopener noreferrer"
+            >sgl-project/sglang ↗</a
+          >
+          <span aria-hidden="true">/</span>
+          <a
+            href="https://github.com/Asher-XunZhang/infra-mechanism-3d"
+            target="_blank"
+            rel="noopener noreferrer"
+            >Infra Mechanism 3D ↗</a
+          >
+        </p>
+        <p>MIT · Asher-XunZhang</p>
+      </footer>
+    </div>
+  </body>
+</html>
