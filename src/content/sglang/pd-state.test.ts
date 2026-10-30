@@ -48,11 +48,12 @@ describe('PD role-switch visual semantics', () => {
 });
 
 describe('SGLang pack wiring', () => {
-  it('keeps three scenes with their own fixed provenance', () => {
+  it('keeps fixed scenes with their own provenance', () => {
     expect(sglangPack.scenes.map((scene) => scene.id)).toEqual([
       'overview',
       'request-flow',
       'pd-compare',
+      'mechanism',
     ]);
     const pd = sglangPack.scenes[2];
     expect(pd.provenance.commit).toContain('94602c9');

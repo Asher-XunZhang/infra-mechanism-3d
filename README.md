@@ -6,6 +6,7 @@
 
 - **系统总览**：7 个模块，区分入口、调度、反分词进程与 GPU 设备边界。
 - **请求数据流**：7 个阅读步骤；观察请求、队列、执行和 KV 占用。完成时释放请求引用，可缓存 KV 仍由 RadixCache 持有。
+- **机制细节**：两条请求、28 个连续事件；比较共享和不共享前缀，展开物理 KV 槽位、请求映射与两轮 Decode。示例固定条件下，最终占用分别为 10 / 12 个示意位置。
 - **PD 角色切换**：左右比较 v0.5.20 / v0.5.21 的管理 API 与 supervisor 路径；正常切换、忙时拒绝、重建失败三种分支，独立源码锚点与同步视角。
 
 支持旋转、缩放、模块下钻、键盘选择、播放/暂停、前进/回退、重置、深链接、减少动态效果、无 WebGL 文本阅读。内容状态是源码支持的教学模型；播放秒数、色块数量和空间位置不代表实测性能、内存容量或物理部署。旧版仍有 PD/PDMux，“不可用”仅指被比较的运行时管理路径。
@@ -26,18 +27,22 @@ npm test
 npm run build
 npm run preview
 python3 -B -m unittest discover -s tools -p 'test_*.py'
+npx playwright install chromium
+npm run test:browser
 ```
 
 `dist/` 是静态演示站；`dist/embed/` 是可嵌入的 ES module 包。构建不会发布网站或 npm 包。不要双击 HTML 使用 `file://`，应通过 HTTP 访问。
 
+浏览器回归检查需要先构建，验证每个场景的中途暂停、反向定位以及静态包反复挂载/销毁。可用 `CHROME_EXECUTABLE` 指定已有 Chromium/Chrome；检查会启动独立无头浏览器，记录 PID/profile，结束后清理并复查。报告写入忽略提交的 `output/browser-regression/`。
+
 ## 嵌入与维护
 
-将 `dist/embed/` **整个目录**放入站点的版本目录，例如 `vendor/infra-mechanism-3d/v0.1.0/`，不要只复制入口 JS，它会引用同目录的构建 chunk。
+将 `dist/embed/` **整个目录**放入站点的版本目录，例如 `vendor/infra-mechanism-3d/v0.2.0/`，不要只复制入口 JS，它会引用同目录的构建 chunk。
 
 ```html
 <div id="sglang-mechanism"></div>
 <script type="module">
-  import { mountSglangViewer } from './vendor/infra-mechanism-3d/v0.1.0/sglang-viewer.js';
+  import { mountSglangViewer } from './vendor/infra-mechanism-3d/v0.2.0/sglang-viewer.js';
   const viewer = mountSglangViewer(document.querySelector('#sglang-mechanism'));
   // 路由卸载时调用 viewer.destroy()，之后可以重新挂载。
 </script>
@@ -55,10 +60,11 @@ CSS 隔离在 Shadow DOM 中；嵌入默认不占用宿主页 URL hash。独立�
 | PD 旧侧 | v0.5.20 · `94602c9c2b7cbdb8efd5c52802dac6a1c180089e` |
 | PD 新侧 | v0.5.21 · `e00930c5489053f26d86b179cee0d087f846acbb` |
 
-读取日期 2026-10-29；固定 Git 对象/公开文件只读核对，未修改外部源码，未运行 GPU 推理或性能测试。这三条基线不能混称同一版本。首版不覆盖所有 SGLang 机制或版本变化。
+读取日期 2026-10-29，机制细节于 2026-10-30 补充复核；固定 Git 对象/公开文件只读核对，未修改外部源码，未运行 GPU 推理或性能测试。这三条基线不能混称同一版本，当前内容不覆盖所有 SGLang 机制或版本变化。
 
 - [参考站点的源码复用、改造与补充分析](docs/reference-analysis.md)
 - [SGLang 源码事实与教学边界](docs/source-review.md)
+- [连续机制回放、共享前缀与 Decode 模型](docs/mechanism-model.md)
 - [证据文件清单](docs/source-manifest.json)
 
 复查证据文件的 SHA-256、锚点与关键符号：
@@ -72,7 +78,8 @@ python3 -B tools/verify_source_evidence.py --fetch --cache .cache/source
 
 ## 代码组织
 
-- `src/viewer/`：通用状态、查看器、相机与渲染生命周期。
+- `src/core/`：独立的连续阅读时钟与时间采样。
+- `src/viewer/`：React 阅读界面、通用状态、相机与渲染生命周期。
 - `src/content/sglang/`：独立内容包、版本证据、场景与状态语义。
 - `src/lib/`：通用与 SGLang 专用嵌入入口。
 - `docs/`、`tools/`：证据、复用分析和可重复的源码校验。

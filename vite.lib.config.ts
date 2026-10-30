@@ -1,6 +1,11 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+  // The embed is loaded directly by static sites without a Node process global.
+  define: { 'process.env.NODE_ENV': JSON.stringify('production') },
+  esbuild: {
+    jsx: 'automatic',
+  },
   build: {
     outDir: 'dist/embed',
     emptyOutDir: false,

@@ -1,6 +1,6 @@
 {
   "name": "infra-mechanism-3d",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "A reusable 3D mechanism viewer, with SGLang as its first content pack.",
@@ -18,13 +18,19 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "npm run test && npm run build",
-    "postbuild": "node tools/package-static.mjs"
+    "postbuild": "node tools/package-static.mjs",
+    "test:browser": "node tools/browser-regression.mjs"
   },
   "dependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "three": "0.186.1"
   },
   "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "@types/three": "0.186.0",
+    "playwright": "1.64.1",
     "typescript": "5.9.3",
     "vite": "7.3.7",
     "vitest": "4.1.12"

@@ -4,6 +4,7 @@ import type {
   LaneDefinition,
   OverlayLabelSpec,
   SceneHandle,
+  ScenePlaybackContext,
   StepRenderContext,
 } from '../../../viewer/types';
 import {
@@ -1159,6 +1160,30 @@ export class SglangPdScene implements SceneHandle {
     this.initialized = true;
     this.currentScenario = context.scenario.id;
     this.applyState(next, immediate);
+  }
+
+  /** Structural transitions share the viewer clock; result boards commit at the boundary. */
+  setPlayback(context: ScenePlaybackContext): void {
+    const before = derivePdVisualState(context.scenario.id, context.previousStep.id, this.lane.id);
+    const after = derivePdVisualState(context.scenario.id, context.step.id, this.lane.id);
+    const progress = Math.max(0, Math.min(1, context.progress));
+    this.applyState(progress < 1 ? before : after, true);
+    if (progress < 1 && !context.reducedMotion) {
+      const t = progress * progress * (3 - 2 * progress);
+      const blend = (group: THREE.Object3D, from: boolean, to: boolean) => {
+        if (from === to) return;
+        setGroupOpacity(group, Number(from) + (Number(to) - Number(from)) * t);
+      };
+      blend(this.oldQueue, before.oldStructure === 'present', after.oldStructure === 'present');
+      blend(this.prefix, before.prefix === 'present', after.prefix === 'present');
+      blend(this.prefixGhost, before.prefix === 'reset', after.prefix === 'reset');
+      blend(this.newStructure, before.newStructure !== 'none', after.newStructure !== 'none');
+      blend(this.requestCards, before.requestCount > 0, after.requestCount > 0);
+      if (before.supervisor !== after.supervisor) {
+        blend(this.supervisor, this.legacy || before.supervisor === 'active', this.legacy || after.supervisor === 'active');
+      }
+    }
+    this.motion.clear();
   }
 
   setSelected(nodeId: string | null): void {

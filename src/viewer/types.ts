@@ -90,6 +90,56 @@ export interface ViewerStep {
   moduleIds: string[];
   sourceIds?: string[];
   laneFacts?: Record<string, LaneFact>;
+  /** Teaching reading time in seconds. Never measured inference time. */
+  duration?: number;
+}
+
+export interface SceneOptionValue {
+  id: string;
+  label: string;
+  detail?: string;
+}
+
+/** A content-owned condition switch. Changing it resets reading time. */
+export interface SceneOption {
+  id: string;
+  label: string;
+  values: SceneOptionValue[];
+  defaultValue: string;
+}
+
+export type ReadoutTone = 'neutral' | 'active' | 'done' | 'held' | 'warning';
+
+export interface ReadoutStat {
+  label: string;
+  value: string;
+  tone?: ReadoutTone;
+}
+
+export interface ReadoutRow {
+  id: string;
+  label: string;
+  meta?: string;
+  detail?: string;
+  tone?: ReadoutTone;
+}
+
+export interface ReadoutGroup {
+  id: string;
+  title: string;
+  note?: string;
+  stats?: ReadoutStat[];
+  rows?: ReadoutRow[];
+}
+
+/** Generic content readout rendered by the React inspector. */
+export interface SceneReadout {
+  eyebrow: string;
+  title: string;
+  detail?: string;
+  pending?: boolean;
+  stats: ReadoutStat[];
+  groups: ReadoutGroup[];
 }
 
 export interface ScenarioDefinition {
@@ -113,6 +163,8 @@ export interface SceneDefinition {
   lanes: LaneDefinition[];
   scenarios: ScenarioDefinition[];
   instructions?: string;
+  options?: SceneOption[];
+  readout?: (context: SceneReadoutContext) => SceneReadout | null;
   buildLane: (args: SceneBuildArgs) => SceneHandle;
 }
 
@@ -137,6 +189,7 @@ export interface SceneBuildArgs {
   laneIndex: number;
   laneCount: number;
   reducedMotion: boolean;
+  options: Record<string, string>;
 }
 
 export interface FocusPoint {
@@ -163,12 +216,39 @@ export interface StepRenderContext {
   reducedMotion: boolean;
 }
 
+/**
+ * A deterministic sample of reading time. Scene renderers must derive their
+ * geometry from this sample instead of accumulating their own animation time.
+ */
+export interface ScenePlaybackContext extends StepRenderContext {
+  previousStep: ViewerStep;
+  progress: number;
+  time: number;
+  playing: boolean;
+  options: Record<string, string>;
+}
+
+export interface SceneReadoutContext {
+  scenario: ScenarioDefinition;
+  step: ViewerStep;
+  stepIndex: number;
+  stepCount: number;
+  progress: number;
+  time: number;
+  lane: LaneDefinition;
+  moduleId: string | null;
+  options: Record<string, string>;
+  reducedMotion: boolean;
+}
+
 export interface SceneHandle {
   scene: THREE.Scene;
   labels: OverlayLabelSpec[];
   focus: Record<string, FocusPoint>;
   home: FocusPoint;
+  /** Legacy single-state hook, used only when setPlayback is absent. */
   setStep: (context: StepRenderContext) => void;
+  setPlayback?: (context: ScenePlaybackContext) => void;
   setSelected: (nodeId: string | null) => void;
   setHovered?: (nodeId: string | null) => void;
   update: (deltaSeconds: number) => boolean;
@@ -179,6 +259,7 @@ export interface ViewerOptions {
   pack: ViewerPack;
   initialSceneId?: string;
   initialLaneMode?: LaneMode;
+  initialOptions?: Record<string, string>;
   syncHash?: boolean;
   fallbackOnNoWebGL?: boolean;
   onEvent?: (event: ViewerEvent) => void;
@@ -200,6 +281,18 @@ export interface ViewerState {
   stepIndex: number;
   moduleId: string | null;
   playing: boolean;
+  options: Record<string, string>;
+}
+
+/** Continuous reading-time snapshot exposed by the mounted viewer. */
+export interface PlaybackState {
+  time: number;
+  duration: number;
+  playing: boolean;
+  speed: number;
+  stepIndex: number;
+  progress: number;
+  done: boolean;
 }
 
 export interface ParsedLocation {
@@ -214,10 +307,18 @@ export interface MountedViewer {
   element: HTMLElement;
   destroy: () => void;
   getState: () => ViewerState;
+  getPlayback?: () => PlaybackState;
   setScene: (sceneId: string) => void;
   setScenario: (scenarioId: string) => void;
   setLaneMode: (mode: LaneMode) => void;
   setStep: (stepIndex: number) => void;
   selectModule: (moduleId: string | null) => void;
+  setOption?: (optionId: string, value: string) => void;
   resetCamera: () => void;
+  play?: () => void;
+  pause?: () => void;
+  seek?: (seconds: number) => void;
+  seekStep?: (stepIndex: number) => void;
+  setSpeed?: (speed: number) => void;
+  subscribe?: (listener: () => void) => () => void;
 }

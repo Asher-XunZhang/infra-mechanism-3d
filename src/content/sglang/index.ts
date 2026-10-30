@@ -2,14 +2,18 @@ import type { SceneDefinition, ViewerPack } from '../../viewer/types';
 import { moduleDocs, processGroups } from './modules';
 import {
   compareScenarios,
+  mechanismSceneData,
   overviewSceneData,
   pdLanes,
   requestFlowSceneData,
   sceneProvenance,
 } from './scenarios';
+import { createMechanismTrace } from './mechanism';
+import { buildMechanismReadout } from './mechanism-readout';
 import { REVIEW_DATE, SGLANG_REPOSITORY, allSources } from './sources';
 import { createOverviewMapScene, createRequestFlowScene } from './three/map-scene';
 import { createPdRoleSwitchScene } from './three/pd-scene';
+import { createMechanismScene } from './three/mechanism-scene';
 
 const overviewScene: SceneDefinition = {
   ...overviewSceneData,
@@ -21,6 +25,22 @@ const requestFlowScene: SceneDefinition = {
   ...requestFlowSceneData,
   provenance: sceneProvenance.requestFlow,
   buildLane: ({ reducedMotion }) => createRequestFlowScene(reducedMotion),
+};
+
+const mechanismScene: SceneDefinition = {
+  ...mechanismSceneData,
+  provenance: sceneProvenance.mechanism,
+  readout: ({ time, moduleId, options }) =>
+    buildMechanismReadout(
+      createMechanismTrace({ sharedPrefix: options.prefix !== 'distinct' }),
+      time,
+      moduleId,
+    ),
+  buildLane: ({ reducedMotion, options }) =>
+    createMechanismScene({
+      sharedPrefix: options.prefix !== 'distinct',
+      reducedMotion,
+    }),
 };
 
 const pdCompareScene: SceneDefinition = {
@@ -52,7 +72,7 @@ export const sglangPack: ViewerPack = {
   modules: moduleDocs,
   groups: processGroups,
   sourceAnchors: allSources,
-  scenes: [overviewScene, requestFlowScene, pdCompareScene],
+  scenes: [overviewScene, requestFlowScene, pdCompareScene, mechanismScene],
   notes: [
     '图形状态由可复现场景步骤驱动；镜头移动与播放时长只是阅读控制，不代表真实耗时。',
     '总览使用 main 基线 279339f；PD 对比分别固定 v0.5.20 与 v0.5.21 的 commit，不把两者混用。',

@@ -5,6 +5,7 @@ import type {
   LaneDefinition,
   OverlayLabelSpec,
   SceneHandle,
+  ScenePlaybackContext,
   StepRenderContext,
 } from './types';
 import { disposeObject } from './three/toolkit';
@@ -71,6 +72,7 @@ export class StageView {
   private disposed = false;
   private hasRendered = false;
   private contextLost = false;
+  private sampledPlayback = false;
 
   constructor(container: HTMLElement, options: StageViewOptions) {
     this.handle = options.handle;
@@ -168,6 +170,17 @@ export class StageView {
       lane: this.lane,
       reducedMotion: this.reducedMotion,
     });
+    this.invalidate();
+  }
+
+  setPlayback(context: Omit<ScenePlaybackContext, 'lane' | 'reducedMotion'>): void {
+    if (this.disposed) return;
+    if (!this.handle.setPlayback) {
+      this.setStep(context);
+      return;
+    }
+    this.sampledPlayback = true;
+    this.handle.setPlayback({ ...context, lane: this.lane, reducedMotion: this.reducedMotion });
     this.invalidate();
   }
 
@@ -494,7 +507,7 @@ export class StageView {
         this.cameraTween = null;
       }
     }
-    const sceneMoving = this.handle.update(delta);
+    const sceneMoving = this.sampledPlayback ? false : this.handle.update(delta);
     this.renderer.render(this.handle.scene, this.camera);
     this.updateLabels();
     this.hasRendered = true;

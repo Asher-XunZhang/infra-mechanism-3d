@@ -291,6 +291,89 @@ export const versionSources: Record<string, SourceAnchor> = {
   },
 };
 
+export const mechanismSources: Record<string, SourceAnchor> = {
+  'mechanism.match_prefix': {
+    id: 'mechanism.match_prefix',
+    label: 'radix_cache.py:397',
+    repository: SGLANG_REPOSITORY,
+    commit: MAIN_COMMIT,
+    path: 'python/sglang/srt/mem_cache/radix_cache.py',
+    startLine: 397,
+    symbol: 'RadixCache.match_prefix',
+    note: '最长前缀查询返回已有设备位置索引；树节点保存索引，不复制 K/V 数值。',
+  },
+  'mechanism.extend_allocate': {
+    id: 'mechanism.extend_allocate',
+    label: 'schedule_batch.py:2678',
+    repository: SGLANG_REPOSITORY,
+    commit: MAIN_COMMIT,
+    path: 'python/sglang/srt/managers/schedule_batch.py',
+    startLine: 2678,
+    symbol: 'ScheduleBatch.prepare_for_extend',
+    note: 'Extend 只准备未命中的输入部分，并为它们分配可写位置。',
+  },
+  'mechanism.decode_prepare': {
+    id: 'mechanism.decode_prepare',
+    label: 'schedule_batch.py:3470',
+    repository: SGLANG_REPOSITORY,
+    commit: MAIN_COMMIT,
+    path: 'python/sglang/srt/managers/schedule_batch.py',
+    startLine: 3470,
+    symbol: 'ScheduleBatch.prepare_for_decode',
+    note: '上一轮采样的 token 成为下一轮 Decode 输入；逐请求新增一个可写位置。',
+  },
+  'mechanism.decode_allocate': {
+    id: 'mechanism.decode_allocate',
+    label: 'schedule_batch.py:3510',
+    repository: SGLANG_REPOSITORY,
+    commit: MAIN_COMMIT,
+    path: 'python/sglang/srt/managers/schedule_batch.py',
+    startLine: 3510,
+    symbol: 'self.out_cache_loc = alloc_for_decode',
+    note: 'Decode 为本轮输入取得输出位置；分配不等于 K/V 已经写入。',
+  },
+  'mechanism.prefill_result': {
+    id: 'mechanism.prefill_result',
+    label: 'batch_result_processor.py:358',
+    repository: SGLANG_REPOSITORY,
+    commit: MAIN_COMMIT,
+    path: 'python/sglang/srt/managers/scheduler_components/batch_result_processor.py',
+    startLine: 358,
+    symbol: 'process_batch_result_prefill → req.output_ids.append',
+    note: 'Prefill 结果处理追加第一个输出 token；该 token 还没有自身 K/V。',
+  },
+  'mechanism.cache_unfinished': {
+    id: 'mechanism.cache_unfinished',
+    label: 'radix_cache.py:561',
+    repository: SGLANG_REPOSITORY,
+    commit: MAIN_COMMIT,
+    path: 'python/sglang/srt/mem_cache/radix_cache.py',
+    startLine: 561,
+    symbol: 'RadixCache.cache_unfinished_req',
+    note: '未完成请求可插入已计算前缀；缓存持有与请求引用同时存在。',
+  },
+  'mechanism.decode_result': {
+    id: 'mechanism.decode_result',
+    label: 'batch_result_processor.py:920',
+    repository: SGLANG_REPOSITORY,
+    commit: MAIN_COMMIT,
+    path: 'python/sglang/srt/managers/scheduler_components/batch_result_processor.py',
+    startLine: 920,
+    symbol: 'process_batch_result_decode',
+    note: 'Decode 结果处理入口；输出 token 回到请求进度，未完成则继续调度。',
+  },
+  'mechanism.cache_finished': {
+    id: 'mechanism.cache_finished',
+    label: 'radix_cache.py:479',
+    repository: SGLANG_REPOSITORY,
+    commit: MAIN_COMMIT,
+    path: 'python/sglang/srt/mem_cache/radix_cache.py',
+    startLine: 479,
+    symbol: 'RadixCache.cache_finished_req',
+    note: '完成时缓存接管可复用 KV，并释放请求槽位与缓存锁引用；物理池不清空。',
+  },
+};
+
 export const allSources: Record<string, SourceAnchor> = {
   ...overviewSources,
   'overview.cache.finished': {
@@ -300,6 +383,7 @@ export const allSources: Record<string, SourceAnchor> = {
     startLine: 479, endLine: 560, symbol: 'RadixCache.cache_finished_req',
     note: '缓存接管可复用 KV 的引用；释放请求引用不等于释放所有 KV。',
   },
+  ...mechanismSources,
   ...versionSources,
 };
 

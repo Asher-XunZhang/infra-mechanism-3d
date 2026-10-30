@@ -2,6 +2,9 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   base: './',
+  esbuild: {
+    jsx: 'automatic',
+  },
   build: {
     outDir: 'dist',
     target: 'es2022',

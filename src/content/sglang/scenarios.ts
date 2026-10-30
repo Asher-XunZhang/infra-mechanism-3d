@@ -4,8 +4,11 @@ import type {
   LaneDefinition,
   LaneFact,
   ScenarioDefinition,
+  SceneOption,
   ViewerStep,
 } from '../../viewer/types';
+import { createMechanismTrace } from './mechanism';
+import { buildMechanismSteps } from './mechanism-readout';
 import {
   MAIN_COMMIT,
   PD_NEW_COMMIT,
@@ -831,6 +834,96 @@ export const requestFlowSceneData = {
   ],
 };
 
+const mechanismConditions: Condition[] = [
+  {
+    id: 'same-model',
+    label: '同一模型、同一缓存命名空间',
+    status: 'pass',
+    detail:
+      '只有模型与缓存命名空间一致，已有 token 前缀才可能复用相同物理位置。换模型不能沿用这组索引。',
+    sourceIds: ['overview.cache.1'],
+  },
+  {
+    id: 'page-size',
+    label: 'page_size = 1',
+    status: 'assumed',
+    detail:
+      '教学池把每个 token 位置当成一个可辨认槽位，便于逐项观察；真实分页缓存还可能合并、拆分节点。',
+    sourceIds: ['mechanism.match_prefix'],
+  },
+  {
+    id: 'r2-after-r1',
+    label: 'R2 在 R1 完成后进入',
+    status: 'assumed',
+    detail:
+      '本例不模拟并发调度。R2 到达时 R1 的请求引用已经释放，保留下来的是缓存持有的物理 KV。',
+    sourceIds: ['mechanism.cache_finished'],
+  },
+  {
+    id: 'plain-loop',
+    label: '关闭 overlap、chunk、投机生成与淘汰',
+    status: 'assumed',
+    detail:
+      '只读普通 prefill → decode 循环，不展示异步重叠、分块 prefill、投机 token 或容量压力驱动的淘汰。',
+    sourceIds: ['overview.scheduler.0'],
+  },
+  {
+    id: 'illustrative',
+    label: 'token ID 与阅读时长都是示意',
+    status: 'assumed',
+    detail:
+      '输入 [11,12,13,14] 与输出 [101,102,103] 是便于辨认的示例，不代表真实模型结果；动画秒数不是推理耗时。',
+    sourceIds: ['mechanism.prefill_result'],
+  },
+];
+
+const mechanismOptions: SceneOption[] = [
+  {
+    id: 'prefix',
+    label: 'R2 输入前缀',
+    values: [
+      {
+        id: 'shared',
+        label: '共享 R1 的两个位置',
+        detail: 'R2 输入 11、12，复用 R1 的物理槽 #00、#01。',
+      },
+      {
+        id: 'distinct',
+        label: '不共享（从第一个 token 就不同）',
+        detail: 'R2 输入 31、32，前缀无命中，需要为四个输入位置分配新槽。',
+      },
+    ],
+    defaultValue: 'shared',
+  },
+];
+
+const mechanismTrace = createMechanismTrace();
+
+export const mechanismSceneData = {
+  id: 'mechanism',
+  navLabel: '机制细节',
+  title: '请求没有跳步：等待、复用与两次 Decode',
+  kicker: 'SGLang / 连续机制细节',
+  description:
+    '同一个请求身份从入口走到调度器；Scheduler 持有请求，Worker / Model 接收输入或引用并交回结果。切换到 Cache 与执行模块，能看到前缀逐项比较、同一物理槽位复用、写入与引用释放的真实关系。',
+  mode: 'guided' as const,
+  instructions:
+    '播放整条 28 步机制链，或点选 Scheduler、Cache、执行等模块下钻。选中模块会暂停阅读但保留当前进度；顶部条件可切换 R2 是否共享前缀，切换后从开头重放。',
+  lanes: [mainLane],
+  options: mechanismOptions,
+  scenarios: [
+    {
+      id: 'continuous',
+      label: '连续机制',
+      summary:
+        '固定 main 基线、同模型同命名空间、page_size=1 的教学路径。R1 完成并释放请求引用后，R2 才进入；缓存 KV 留在物理池中。',
+      steps: buildMechanismSteps(mechanismTrace),
+      conditions: mechanismConditions,
+      note: '这里没有并发、分块 prefill、overlap 或淘汰；画面只解释因果关系，不复现性能。',
+    },
+  ],
+};
+
 export const pdLanes = [legacyLane, modernLane];
 
 export const sceneProvenance = {
@@ -860,5 +953,14 @@ export const sceneProvenance = {
     scope:
       '只比较 PD 运行中角色切换的管理 API 与 supervisor 路径；不代表全部版本差异，旧版仍有 PD 与 PDMux。',
     reviewed: '2026-10-29',
+  },
+  mechanism: {
+    repository: SGLANG_REPOSITORY,
+    commit: MAIN_COMMIT,
+    shortCommit: MAIN_COMMIT.slice(0, 10),
+    label: '连续机制固定基线',
+    scope:
+      '普通单卡生成路径的教学模型：调度、前缀复用、物理 KV 位置与两轮 Decode；不表示实际吞吐、内存占用或并发时序。',
+    reviewed: '2026-10-30',
   },
 };

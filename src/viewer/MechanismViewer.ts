@@ -1,103 +1,48 @@
+import { createElement } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { PlaybackClock, sampleTimeline } from '../core/timeline';
 import type {
   LaneDefinition,
-  LaneFact,
+  LaneMode,
   MountedViewer,
+  PlaybackState,
   SceneDefinition,
+  SceneHandle,
+  ScenePlaybackContext,
   ScenarioDefinition,
   ViewerEvent,
   ViewerOptions,
   ViewerState,
-  ViewerStep,
 } from './types';
 import {
-  advancePlayback,
+  clampIndex,
   getScenario,
   getScene,
-  moduleIdsForScene,
   parseLocationHash,
-  pausePlayback,
-  resetSteps,
-  selectModule,
   serializeLocation,
-  setStep,
-  sourceUrl,
   stateFromLocation,
-  stepBackward,
-  stepForward,
   switchLaneMode,
   switchScenario,
   switchScene,
-  togglePlayback,
   visibleLaneIds,
 } from './state';
+import { stepDurations, stepStarts } from './timeline';
 import { StageView } from './StageView';
 import { disposeObject } from './three/toolkit';
+import { ViewerApp } from './react/ViewerApp';
+import type { ViewerUiController, ViewerUiSnapshot } from './react/types';
 import viewerCss from './viewer.css?inline';
 
-const SHELL = `
-<section class="imv" data-ref="root">
-  <header class="imv-bar">
-    <div class="imv-brand">
-      <span class="imv-brand__mark" aria-hidden="true">IM</span>
-      <div class="imv-brand__copy">
-        <strong>机制图</strong>
-        <span>INFRA MECHANISM VIEWER</span>
-      </div>
-    </div>
-    <nav class="imv-nav" data-ref="nav" aria-label="场景切换"></nav>
-    <div class="imv-bar__meta" data-ref="bar-meta"></div>
-  </header>
-  <div class="imv-context" data-ref="context"></div>
-  <div class="imv-tools" data-ref="tools"></div>
-  <div class="imv-main">
-    <section class="imv-visual" aria-label="三维场景与阅读控制">
-      <div class="imv-lanes" data-ref="lanes"></div>
-      <p class="imv-caption" data-ref="caption"></p>
-      <div class="imv-transport" data-ref="transport"></div>
-    </section>
-    <aside class="imv-inspector">
-      <div class="imv-guide" data-ref="guide"></div>
-      <div class="imv-dossier" data-ref="dossier"></div>
-    </aside>
-  </div>
-  <div class="imv-lower" data-ref="lower"></div>
-  <footer class="imv-foot" data-ref="foot"></footer>
-  <p class="imv-sr" data-ref="live" aria-live="polite" aria-atomic="true"></p>
-</section>`;
+type PlaybackStage = StageView & {
+  setPlayback?: (context: Omit<ScenePlaybackContext, 'lane' | 'reducedMotion'>) => void;
+};
 
-const FALLBACK_HINT =
-  '此浏览器没有可用的 WebGL 上下文。三维结构改为文本阅读；步骤、条件与模块档案仍可操作。';
+type StageSync = { stepId: string; selected: string | null };
 
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (character) => {
-    switch (character) {
-      case '&':
-        return '&amp;';
-      case '<':
-        return '&lt;';
-      case '>':
-        return '&gt;';
-      case '"':
-        return '&quot;';
-      default:
-        return '&#39;';
-    }
-  });
-}
-
-function safeUrl(value: string): string {
-  return /^https?:\/\//i.test(value) ? escapeHtml(value) : '#';
-}
-
-function externalLink(url: string, label: string, className = ''): string {
-  return `<a class="${className}" href="${safeUrl(url)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
-}
-
-function hasWebGL(): boolean {
+function detectWebGL(): boolean {
   try {
     const canvas = document.createElement('canvas');
-    const context =
-      canvas.getContext('webgl2') ?? canvas.getContext('webgl');
+    const context = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
     if (!context) {
       return false;
     }
@@ -111,49 +56,52 @@ function hasWebGL(): boolean {
   }
 }
 
-function conditionLabel(status: string): string {
-  switch (status) {
-    case 'pass':
-      return '通过';
-    case 'fail':
-      return '不通过';
-    case 'assumed':
-      return '明确假设';
-    default:
-      return '跳过';
-  }
+function optionsKey(options: Record<string, string>): string {
+  return Object.keys(options)
+    .sort()
+    .map((key) => `${key}=${options[key]}`)
+    .join('|');
 }
 
-export class MechanismViewer implements MountedViewer {
+function failureKey(sceneId: string, laneId: string): string {
+  return `${sceneId}:${laneId}`;
+}
+
+function stageErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    if (/webgl/i.test(error.message)) {
+      return 'WebGL 初始化失败，三维视图不可用。';
+    }
+    return `三维场景初始化失败：${error.message.slice(0, 160)}`;
+  }
+  return '三维场景初始化失败，已切换为文本阅读。';
+}
+
+export class MechanismViewer implements MountedViewer, ViewerUiController {
   readonly element: HTMLElement;
   private readonly pack: ViewerOptions['pack'];
   private readonly options: ViewerOptions;
   private readonly shadow: ShadowRoot;
-  private readonly root: HTMLElement;
-  private readonly navEl: HTMLElement;
-  private readonly barMetaEl: HTMLElement;
-  private readonly contextEl: HTMLElement;
-  private readonly toolsEl: HTMLElement;
-  private readonly lanesEl: HTMLElement;
-  private readonly captionEl: HTMLElement;
-  private readonly transportEl: HTMLElement;
-  private readonly guideEl: HTMLElement;
-  private readonly dossierEl: HTMLElement;
-  private readonly lowerEl: HTMLElement;
-  private readonly footEl: HTMLElement;
-  private readonly liveEl: HTMLElement;
+  private readonly reactRoot: Root;
   private readonly abort = new AbortController();
   private readonly stageViews = new Map<string, StageView>();
-  private readonly laneFoots = new Map<string, HTMLElement>();
-  private readonly fallbacks = new Map<string, HTMLElement>();
+  private readonly stageKeys = new Map<string, string>();
+  private readonly stageFailuresValue = new Map<string, string>();
+  private readonly stageSync = new Map<string, StageSync>();
+  private readonly listeners = new Set<() => void>();
   private readonly boundary: IntersectionObserver;
   private readonly media: MediaQueryList;
   private stateValue: ViewerState;
+  private clock: PlaybackClock;
+  private snapshot: ViewerUiSnapshot;
+  private readonly fallbackOnNoWebGL: boolean;
+  private readonly webglSupported: boolean;
+  private readonly reducedMotionQuery: boolean;
   private reducedMotion: boolean;
-  private playTimer: number | null = null;
-  private viewKey = '';
-  private webglSupported: boolean;
   private inView = true;
+  private frameId: number | null = null;
+  private lastFrame = 0;
+  private lastPublish = 0;
   private disposed = false;
 
   constructor(container: HTMLElement, options: ViewerOptions) {
@@ -162,17 +110,24 @@ export class MechanismViewer implements MountedViewer {
     if (!this.pack.scenes.length) {
       throw new Error('A viewer pack needs at least one scene.');
     }
+    this.fallbackOnNoWebGL = options.fallbackOnNoWebGL !== false;
+    this.webglSupported = detectWebGL();
     this.media = window.matchMedia('(prefers-reduced-motion: reduce)');
-    this.reducedMotion = this.media.matches;
-    this.webglSupported = hasWebGL();
+    this.reducedMotionQuery = this.media.matches;
+    this.reducedMotion = this.reducedMotionQuery;
 
-    const parsed = options.syncHash === false
-      ? {}
-      : parseLocationHash(window.location.hash);
+    const parsed =
+      options.syncHash === false ? {} : parseLocationHash(window.location.hash);
     this.stateValue = stateFromLocation(this.pack, parsed, {
       initialSceneId: options.initialSceneId,
       initialLaneMode: options.initialLaneMode,
+      initialOptions: options.initialOptions,
     });
+    if (!this.scenario().steps.length) {
+      throw new Error('A viewer scenario needs at least one step.');
+    }
+    this.clock = this.createClock(this.stateValue.stepIndex);
+    this.snapshot = this.buildSnapshot();
 
     this.element = document.createElement('div');
     this.element.className = 'imv-host';
@@ -181,46 +136,26 @@ export class MechanismViewer implements MountedViewer {
     this.shadow = this.element.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
     style.textContent = viewerCss;
-    const holder = document.createElement('div');
-    holder.innerHTML = SHELL;
-    const shell = holder.firstElementChild;
-    if (!(shell instanceof HTMLElement)) {
-      throw new Error('Unable to create the viewer shell.');
-    }
-    this.shadow.append(style, shell);
-    this.root = shell;
-    this.navEl = this.requireRef(shell, 'nav');
-    this.barMetaEl = this.requireRef(shell, 'bar-meta');
-    this.contextEl = this.requireRef(shell, 'context');
-    this.toolsEl = this.requireRef(shell, 'tools');
-    this.lanesEl = this.requireRef(shell, 'lanes');
-    this.captionEl = this.requireRef(shell, 'caption');
-    this.transportEl = this.requireRef(shell, 'transport');
-    this.guideEl = this.requireRef(shell, 'guide');
-    this.dossierEl = this.requireRef(shell, 'dossier');
-    this.lowerEl = this.requireRef(shell, 'lower');
-    this.footEl = this.requireRef(shell, 'foot');
-    this.liveEl = this.requireRef(shell, 'live');
+    const appHost = document.createElement('div');
+    appHost.className = 'imv-react-root';
+    this.shadow.append(style, appHost);
+    this.reactRoot = createRoot(appHost);
+    this.reactRoot.render(createElement(ViewerApp, { viewer: this }));
 
-    this.root.dataset.reducedMotion = String(this.reducedMotion);
     this.bindEvents();
     this.boundary = new IntersectionObserver(
       (entries) => {
-        const entry = entries[0];
-        this.inView = Boolean(entry?.isIntersecting);
+        this.inView = Boolean(entries[0]?.isIntersecting);
         if (!this.inView) {
           this.pauseForVisibility();
         }
-        this.syncPlaybackTimer();
       },
       { threshold: 0.04 },
     );
-    this.boundary.observe(this.root);
 
     container.append(this.element);
-    this.refreshScene();
+    this.boundary.observe(this.element);
     this.writeHash();
-    this.syncPlaybackTimer();
     this.emit({ type: 'ready' });
   }
 
@@ -228,61 +163,230 @@ export class MechanismViewer implements MountedViewer {
     return new MechanismViewer(container, options);
   }
 
+  getSnapshot = (): ViewerUiSnapshot => this.snapshot;
+
+  subscribe = (listener: () => void): (() => void) => {
+    if (this.disposed) {
+      return () => {};
+    }
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  };
+
   destroy(): void {
     if (this.disposed) {
       return;
     }
     this.disposed = true;
-    this.stopPlaybackTimer();
+    this.stopLoop();
     this.abort.abort();
     this.boundary.disconnect();
+    this.clock.destroy();
+    this.reactRoot.unmount();
     this.disposeStages();
+    this.listeners.clear();
     this.emit({ type: 'destroy' });
     this.element.remove();
   }
 
   getState(): ViewerState {
-    return { ...this.stateValue };
+    const playback = this.readPlayback();
+    return {
+      ...this.stateValue,
+      stepIndex: playback.stepIndex,
+      playing: playback.playing,
+    };
+  }
+
+  getPlayback(): PlaybackState {
+    return this.readPlayback();
   }
 
   setScene(sceneId: string): void {
     const previous = this.stateValue;
-    const next = switchScene(
-      this.pack,
-      this.stateValue,
-      sceneId,
-      this.stateValue.laneMode,
-    );
-    this.applyState(previous, next);
+    const next = switchScene(this.pack, previous, sceneId, previous.laneMode);
+    this.stateValue = next;
+    this.stageFailuresValue.clear();
+    this.stageSync.clear();
+    this.resetClock(next.stepIndex);
+    this.publish();
+    if (previous.sceneId !== next.sceneId) {
+      this.emit({ type: 'scene-change', sceneId: next.sceneId });
+    }
+    if (previous.stepIndex !== next.stepIndex) {
+      this.emitStepChange();
+    }
+    this.writeHash();
   }
 
   setScenario(scenarioId: string): void {
     const previous = this.stateValue;
-    const next = switchScenario(this.scene(), this.stateValue, scenarioId);
-    this.applyState(previous, next);
+    const next = switchScenario(this.scene(), previous, scenarioId);
+    this.stateValue = next;
+    this.resetClock(next.stepIndex);
+    this.syncAllStages(true);
+    this.publish();
+    if (previous.stepIndex !== next.stepIndex) {
+      this.emitStepChange();
+    }
+    this.writeHash();
   }
 
-  setLaneMode(mode: ViewerState['laneMode']): void {
+  setLaneMode(mode: LaneMode): void {
     const previous = this.stateValue;
-    const next = switchLaneMode(this.scene(), this.stateValue, mode);
-    this.applyState(previous, next);
+    const next = switchLaneMode(this.scene(), previous, mode);
+    this.stateValue = next;
+    this.resetClock(next.stepIndex);
+    this.syncAllStages(true);
+    this.publish();
+    this.writeHash();
   }
 
   setStep(stepIndex: number): void {
+    const scenario = this.scenario();
+    if (!scenario.steps.length) {
+      return;
+    }
+    const target = clampIndex(stepIndex, scenario.steps.length);
+    const starts = stepStarts(scenario);
+    this.clock.seek(starts[target] ?? 0);
     const previous = this.stateValue;
-    const next = setStep(this.scenario(), this.stateValue, stepIndex);
-    this.applyState(previous, next);
+    this.stateValue = {
+      ...previous,
+      stepIndex: target,
+      playing: false,
+    };
+    this.stopLoop();
+    this.syncAllStages(true);
+    this.publish();
+    if (previous.stepIndex !== target) {
+      this.emitStepChange();
+    }
+    this.writeHash();
+  }
+
+  stepBy(delta: number): void {
+    if (!Number.isFinite(delta) || delta === 0) {
+      return;
+    }
+    this.setStep(this.stateValue.stepIndex + Math.trunc(delta));
   }
 
   selectModule(moduleId: string | null): void {
     const normalized =
       moduleId && this.pack.modules[moduleId] ? moduleId : null;
     const previous = this.stateValue;
-    let next = selectModule(this.stateValue, normalized);
-    if (normalized) {
-      next = pausePlayback(next);
+    if (normalized && this.clock.getSnapshot().playing) {
+      this.clock.pause();
+      this.stopLoop();
     }
-    this.applyState(previous, next);
+    this.stateValue = {
+      ...this.stateValue,
+      moduleId: normalized,
+      playing: this.clock.getSnapshot().playing,
+    };
+    this.syncAllStages(true);
+    this.publish();
+    if (previous.moduleId !== normalized) {
+      this.emit({ type: 'module-select', moduleId: normalized });
+      this.writeHash();
+    }
+    if (normalized) {
+      for (const stage of this.stageViews.values()) {
+        stage.focusNode(normalized);
+      }
+    }
+  }
+
+  setOption(optionId: string, value: string): void {
+    const scene = this.scene();
+    const option = scene.options?.find((candidate) => candidate.id === optionId);
+    if (!option || !option.values.some((entry) => entry.id === value)) {
+      return;
+    }
+    if (this.stateValue.options[optionId] === value) {
+      return;
+    }
+    const previous = this.stateValue;
+    this.stateValue = {
+      ...previous,
+      stepIndex: 0,
+      playing: false,
+      moduleId: null,
+      options: { ...previous.options, [optionId]: value },
+    };
+    this.stageSync.clear();
+    this.resetClock(0);
+    this.publish();
+    if (previous.stepIndex !== 0) {
+      this.emitStepChange();
+      this.writeHash();
+    }
+  }
+
+  play(): void {
+    if (this.clock.getSnapshot().playing || this.scenario().steps.length < 2) {
+      return;
+    }
+    if (!this.inView || document.hidden) {
+      return;
+    }
+    const previous = this.stateValue;
+    this.clock.play();
+    const playback = this.readPlayback();
+    this.stateValue = {
+      ...previous,
+      stepIndex: playback.stepIndex,
+      playing: true,
+    };
+    this.startLoop();
+    this.syncAllStages(true, playback);
+    this.publish();
+    if (previous.stepIndex !== playback.stepIndex) {
+      this.emitStepChange();
+    }
+    this.writeHash();
+  }
+
+  pause(): void {
+    if (!this.clock.getSnapshot().playing && !this.stateValue.playing) {
+      return;
+    }
+    this.clock.pause();
+    this.stateValue = { ...this.stateValue, playing: false };
+    this.stopLoop();
+    this.syncAllStages(true);
+    this.publish();
+  }
+
+  seek(seconds: number): void {
+    this.clock.seek(seconds);
+    const playback = this.readPlayback();
+    const previous = this.stateValue;
+    const stepChanged = previous.stepIndex !== playback.stepIndex;
+    this.stateValue = {
+      ...previous,
+      stepIndex: playback.stepIndex,
+      playing: false,
+    };
+    this.stopLoop();
+    this.syncAllStages(true, playback);
+    this.publish();
+    if (stepChanged) {
+      this.emitStepChange();
+      this.writeHash();
+    }
+  }
+
+  seekStep(stepIndex: number): void {
+    this.setStep(stepIndex);
+  }
+
+  setSpeed(speed: number): void {
+    this.clock.setSpeed(speed);
+    this.publish();
   }
 
   resetCamera(): void {
@@ -291,19 +395,102 @@ export class MechanismViewer implements MountedViewer {
     }
   }
 
-  private requireRef(scope: ParentNode, name: string): HTMLElement {
-    const element = scope.querySelector<HTMLElement>(`[data-ref="${name}"]`);
-    if (!element) {
-      throw new Error(`Viewer shell is missing [data-ref="${name}"]`);
+  resetLaneCamera(laneId: string): void {
+    this.stageViews.get(laneId)?.resetCamera();
+  }
+
+  bindStage(laneId: string, host: HTMLElement): void {
+    if (this.disposed) {
+      return;
     }
-    return element;
+    const lane = this.lanesForView().find((candidate) => candidate.id === laneId);
+    if (!lane) {
+      return;
+    }
+    const scene = this.scene();
+    const key = `${scene.id}:${lane.id}:${this.reducedMotion}:${optionsKey(this.stateValue.options)}`;
+    const existing = this.stageViews.get(laneId);
+    if (
+      existing &&
+      this.stageKeys.get(laneId) === key &&
+      existing.root.parentElement === host
+    ) {
+      this.syncStage(lane, existing, false);
+      return;
+    }
+    if (existing) {
+      this.destroyStage(laneId);
+    }
+    if (!this.webglSupported) {
+      return;
+    }
+    const keyFailure = failureKey(scene.id, lane.id);
+    if (this.stageFailuresValue.has(keyFailure)) {
+      return;
+    }
+
+    let handle: SceneHandle | undefined;
+    let stage: StageView | undefined;
+    try {
+      handle = scene.buildLane({
+        lane,
+        scene,
+        laneIndex: scene.lanes.findIndex((candidate) => candidate.id === lane.id),
+        laneCount: this.lanesForView().length,
+        reducedMotion: this.reducedMotion,
+        options: { ...this.stateValue.options },
+      });
+      stage = new StageView(host, {
+        lane,
+        handle,
+        reducedMotion: this.reducedMotion,
+        onCameraChange: (pose) => {
+          for (const [otherId, other] of this.stageViews) {
+            if (otherId !== lane.id) {
+              other.setCameraPose(pose);
+            }
+          }
+        },
+        onSelect: (nodeId) => this.selectModule(nodeId),
+      });
+      this.stageViews.set(lane.id, stage);
+      this.stageKeys.set(lane.id, key);
+      this.syncStage(lane, stage, true);
+      if (this.stateValue.moduleId) {
+        stage.focusNode(this.stateValue.moduleId);
+      }
+    } catch (error) {
+      if (stage) {
+        stage.dispose();
+      } else {
+        try {
+          handle?.dispose();
+          if (handle) {
+            disposeObject(handle.scene);
+          }
+        } catch {
+          // The failed scene may already be partially disposed.
+        }
+      }
+      host.replaceChildren();
+      this.stageFailuresValue.set(keyFailure, stageErrorMessage(error));
+      this.publish();
+    }
+  }
+
+  unbindStage(laneId: string, host: HTMLElement): void {
+    const stage = this.stageViews.get(laneId);
+    if (!stage) {
+      return;
+    }
+    if (stage.root.parentElement === host || !stage.root.isConnected) {
+      this.destroyStage(laneId);
+    }
   }
 
   private bindEvents(): void {
     const signal = this.abort.signal;
-    this.shadow.addEventListener('click', this.handleClick, { signal });
-    this.shadow.addEventListener('keydown', this.handleKeydown, { signal });
-    document.addEventListener('keydown', this.handleGlobalKeydown, { signal });
+    this.element.addEventListener('keydown', this.handleKeydown, { signal });
     document.addEventListener('visibilitychange', this.handleVisibility, {
       signal,
     });
@@ -311,160 +498,47 @@ export class MechanismViewer implements MountedViewer {
     this.media.addEventListener('change', this.handleMotionChange, { signal });
   }
 
-  private handleClick = (event: Event): void => {
-    const target = event.target;
-    if (!(target instanceof Element)) {
+  private handleKeydown = (event: KeyboardEvent): void => {
+    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
       return;
     }
-    const button = target.closest<HTMLElement>(
-      'button, [data-select-module], [data-clear-module]',
-    );
-    if (!button) {
-      return;
-    }
-    if (button.dataset.sceneId) {
-      this.setScene(button.dataset.sceneId);
-      this.restoreFocus(`[data-scene-id="${this.cssEscape(button.dataset.sceneId)}"]`);
-      return;
-    }
-    if (button.dataset.scenarioId) {
-      const scenarioId = button.dataset.scenarioId;
-      this.setScenario(scenarioId);
-      this.restoreFocus(
-        `[data-scenario-id="${this.cssEscape(scenarioId)}"]`,
-      );
-      return;
-    }
-    if (button.dataset.laneMode) {
-      const mode = button.dataset.laneMode as ViewerState['laneMode'];
-      this.setLaneMode(mode);
-      this.restoreFocus(`[data-lane-mode="${mode}"]`);
-      return;
-    }
-    if (button.dataset.stepIndex) {
-      const index = Number.parseInt(button.dataset.stepIndex, 10);
-      this.setStep(index);
-      this.restoreFocus(
-        `[data-step-index="${this.stateValue.stepIndex}"]`,
-      );
-      return;
-    }
-    if (button.dataset.selectModule) {
-      const moduleId = button.dataset.selectModule;
-      this.selectModule(moduleId);
-      this.restoreFocus(
-        `[data-select-module="${this.cssEscape(moduleId)}"]`,
-      );
-      return;
-    }
-    if (button.hasAttribute('data-clear-module')) {
-      this.selectModule(null);
-      this.restoreFocus('[data-clear-module]');
-      return;
-    }
-    switch (button.dataset.action) {
-      case 'previous':
-        this.pauseAndStep((scenario, state) => stepBackward(scenario, state));
-        this.restoreFocus(
-          `[data-step-index="${this.stateValue.stepIndex}"]`,
-        );
-        break;
-      case 'next':
-        this.pauseAndStep((scenario, state) => stepForward(scenario, state));
-        this.restoreFocus(
-          `[data-step-index="${this.stateValue.stepIndex}"]`,
-        );
-        break;
-      case 'play':
-        this.togglePlayback();
-        this.restoreFocus('[data-action="play"]');
-        break;
-      case 'reset':
-        this.pauseAndStep((scenario, state) => resetSteps(scenario, state));
-        this.restoreFocus('[data-action="reset"]');
-        break;
-      case 'reset-camera':
-        this.resetCamera();
-        break;
-      case 'reset-lane': {
-        const laneId = button.dataset.laneId;
-        if (laneId) {
-          this.stageViews.get(laneId)?.resetCamera();
-        }
-        break;
-      }
-      default:
-        break;
-    }
-  };
-
-  private handleKeydown = (event: Event): void => {
-    if (!(event instanceof KeyboardEvent)) {
-      return;
-    }
-    const target = event.target;
-    if (!(target instanceof Element)) {
-      return;
-    }
-    const moduleButton = target.closest<HTMLElement>('[data-select-module]');
-    if (!moduleButton) {
-      return;
-    }
-    const direction =
-      event.key === 'ArrowRight' || event.key === 'ArrowDown'
-        ? 1
-        : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
-          ? -1
-          : 0;
-    if (!direction) {
-      return;
-    }
-    const buttons = [
-      ...this.shadow.querySelectorAll<HTMLElement>('[data-select-module]'),
-    ];
-    if (!buttons.length) {
-      return;
-    }
-    event.preventDefault();
-    const index = buttons.indexOf(moduleButton);
-    const next = buttons[(index + direction + buttons.length) % buttons.length];
-    next?.focus();
-  };
-
-  private handleGlobalKeydown = (event: KeyboardEvent): void => {
-    const path = event.composedPath();
-    if (!path.includes(this.element)) return;
-    if (
-      event.defaultPrevented ||
-      event.metaKey ||
-      event.ctrlKey ||
-      event.altKey ||
-      event.shiftKey
-    ) {
-      return;
-    }
-    const target = path[0];
+    const target = event.composedPath()[0];
     if (
       target instanceof Element &&
       target.closest(
-        'input, textarea, select, [contenteditable="true"], button, a[href]',
+        'button, a[href], input, textarea, select, [contenteditable="true"]',
       )
     ) {
       return;
     }
     if (event.key === 'ArrowRight') {
       event.preventDefault();
-      this.pauseAndStep((scenario, state) => stepForward(scenario, state));
+      this.stepBy(1);
     } else if (event.key === 'ArrowLeft') {
       event.preventDefault();
-      this.pauseAndStep((scenario, state) => stepBackward(scenario, state));
+      this.stepBy(-1);
     } else if (event.key === ' ') {
+      if (event.repeat) {
+        return;
+      }
       event.preventDefault();
-      this.togglePlayback();
+      if (this.clock.getSnapshot().playing) {
+        this.pause();
+      } else {
+        this.play();
+      }
     } else if (event.key.toLowerCase() === 'r') {
-      this.pauseAndStep((scenario, state) => resetSteps(scenario, state));
+      event.preventDefault();
+      this.setStep(0);
     } else if (event.key.toLowerCase() === 'c') {
+      event.preventDefault();
       this.resetCamera();
+    }
+  };
+
+  private handleVisibility = (): void => {
+    if (document.hidden) {
+      this.pauseForVisibility();
     }
   };
 
@@ -479,830 +553,279 @@ export class MechanismViewer implements MountedViewer {
       {
         initialSceneId: this.options.initialSceneId,
         initialLaneMode: this.options.initialLaneMode,
+        initialOptions: this.options.initialOptions,
       },
     );
-    this.applyState(previous, next, { writeHash: false });
-  };
-
-  private handleVisibility = (): void => {
-    if (document.hidden) {
-      this.pauseForVisibility();
+    this.stateValue = next;
+    if (previous.sceneId !== next.sceneId) {
+      this.stageFailuresValue.clear();
+      this.stageSync.clear();
     }
-    this.syncPlaybackTimer();
+    this.resetClock(next.stepIndex);
+    if (previous.sceneId === next.sceneId) {
+      this.syncAllStages(true);
+    }
+    this.publish();
+    if (previous.sceneId !== next.sceneId) {
+      this.emit({ type: 'scene-change', sceneId: next.sceneId });
+    }
+    if (previous.stepIndex !== next.stepIndex) {
+      this.emitStepChange();
+    }
+    if (previous.moduleId !== next.moduleId) {
+      this.emit({ type: 'module-select', moduleId: next.moduleId });
+    }
   };
 
   private handleMotionChange = (event: MediaQueryListEvent): void => {
     this.reducedMotion = event.matches;
-    this.root.dataset.reducedMotion = String(this.reducedMotion);
     if (this.reducedMotion) {
       this.pauseForVisibility();
     }
-    this.refreshScene();
+    this.publish();
   };
 
   private pauseForVisibility(): void {
-    if (!this.stateValue.playing) {
-      return;
+    if (this.clock.getSnapshot().playing) {
+      this.pause();
     }
-    const previous = this.stateValue;
-    this.stateValue = pausePlayback(this.stateValue);
-    this.applyState(previous, this.stateValue);
   }
 
-  private pauseAndStep(
-    transition: (
-      scenario: ScenarioDefinition,
-      state: ViewerState,
-    ) => ViewerState,
-  ): void {
-    const previous = this.stateValue;
-    const next = transition(this.scenario(), pausePlayback(this.stateValue));
-    this.applyState(previous, next);
+  private createClock(stepIndex: number, speed = 1): PlaybackClock {
+    const scenario = this.scenario();
+    const clock = new PlaybackClock(stepDurations(scenario));
+    clock.setSpeed(speed);
+    const starts = stepStarts(scenario);
+    clock.seek(starts[clampIndex(stepIndex, scenario.steps.length)] ?? 0);
+    return clock;
   }
 
-  private togglePlayback(): void {
-    const previous = this.stateValue;
-    const next = togglePlayback(this.scenario(), this.stateValue);
-    this.applyState(previous, next);
-    this.syncPlaybackTimer();
+  private resetClock(stepIndex: number): void {
+    const speed = this.clock?.getSnapshot().speed ?? 1;
+    this.clock?.destroy();
+    this.stopLoop();
+    this.clock = this.createClock(stepIndex, speed);
   }
 
-  private syncPlaybackTimer(): void {
+  private readPlayback(): PlaybackState {
+    const snapshot = this.clock.getSnapshot();
+    const scenario = this.scenario();
+    const sample = sampleTimeline(stepDurations(scenario), snapshot.time);
+    return {
+      time: snapshot.time,
+      duration: snapshot.duration,
+      playing: snapshot.playing,
+      speed: snapshot.speed,
+      stepIndex: sample.index,
+      progress: sample.progress,
+      done: sample.done,
+    };
+  }
+
+  private buildSnapshot(
+    playback: PlaybackState = this.readPlayback(),
+  ): ViewerUiSnapshot {
+    const scene = this.scene();
+    const scenario = this.scenario();
+    const targetStep = scenario.steps[playback.stepIndex] ?? scenario.steps[0];
+    const confirmedStep = scenario.steps[Math.max(0, playback.stepIndex - 1)] ?? targetStep;
+    // Captions describe the current action; assertions must not announce its
+    // after-state while geometry is still in transit.
+    const displayStep = playback.progress < 1 && targetStep.laneFacts
+      ? {
+          ...targetStep,
+          laneFacts: Object.fromEntries(Object.entries(targetStep.laneFacts).map(([id, fact]) => [id, fact.tone === 'blocked' ? fact : {
+            ...fact,
+            tone: 'neutral' as const,
+            status: `进行中 · ${targetStep.label}`,
+            detail: `已确认状态：${confirmedStep.laneFacts?.[id]?.detail ?? this.scene().lanes.find(lane => lane.id === id)?.status ?? ''}`,
+          }])),
+        }
+      : targetStep;
+    const failures: Record<string, string> = {};
+    for (const [key, value] of this.stageFailuresValue) {
+      failures[key] = value;
+    }
+    return Object.freeze({
+      pack: this.pack,
+      state: Object.freeze({
+        ...this.stateValue,
+        stepIndex: playback.stepIndex,
+        playing: playback.playing,
+      }),
+      scene,
+      scenario,
+      step: displayStep,
+      stepCount: scenario.steps.length,
+      playback: Object.freeze(playback),
+      reducedMotion: this.reducedMotion,
+      webglSupported: this.webglSupported,
+      fallbackOnNoWebGL: this.fallbackOnNoWebGL,
+      stageFailures: Object.freeze(failures),
+      optionsKey: optionsKey(this.stateValue.options),
+    });
+  }
+
+  private publish(): void {
     if (this.disposed) {
       return;
     }
-    const shouldRun =
-      this.stateValue.playing && this.inView && !document.hidden;
-    if (!shouldRun) {
-      this.stopPlaybackTimer();
-      return;
-    }
-    if (this.playTimer !== null) {
-      return;
-    }
-    this.playTimer = window.setInterval(() => {
-      if (this.disposed) {
-        this.stopPlaybackTimer();
-        return;
+    const playback = this.readPlayback();
+    this.stateValue = {
+      ...this.stateValue,
+      stepIndex: playback.stepIndex,
+      playing: playback.playing,
+    };
+    this.snapshot = this.buildSnapshot(playback);
+    for (const listener of [...this.listeners]) {
+      try {
+        listener();
+      } catch {
+        // A consumer render error must not stop the reading clock.
       }
-      const previous = this.stateValue;
-      const next = advancePlayback(this.scenario(), this.stateValue);
-      if (
-        next.stepIndex === previous.stepIndex &&
-        next.playing === previous.playing
-      ) {
-        this.stopPlaybackTimer();
-        return;
-      }
-      this.applyState(previous, next);
-      if (!next.playing) {
-        this.stopPlaybackTimer();
-      }
-    }, 2800);
-  }
-
-  private stopPlaybackTimer(): void {
-    if (this.playTimer !== null) {
-      window.clearInterval(this.playTimer);
-      this.playTimer = null;
     }
   }
 
-  private applyState(
-    previous: ViewerState,
-    next: ViewerState,
-    options: { focusSelector?: string; writeHash?: boolean } = {},
-  ): void {
-    if (this.disposed) {
+  private startLoop(): void {
+    if (this.frameId !== null || this.disposed) {
       return;
     }
-    const sceneChanged = previous.sceneId !== next.sceneId;
-    const stepChanged = previous.stepIndex !== next.stepIndex;
-    const moduleChanged = previous.moduleId !== next.moduleId;
-    this.stateValue = next;
+    this.lastFrame = performance.now();
+    this.lastPublish = 0;
+    this.frameId = requestAnimationFrame(this.tick);
+  }
 
-    this.refreshScene();
+  private stopLoop(): void {
+    if (this.frameId !== null) {
+      cancelAnimationFrame(this.frameId);
+      this.frameId = null;
+    }
+  }
 
-    if (moduleChanged && next.moduleId) {
-      for (const stage of this.stageViews.values()) {
-        stage.focusNode(next.moduleId);
-      }
+  private tick = (now: number): void => {
+    this.frameId = null;
+    if (this.disposed || !this.clock.getSnapshot().playing) {
+      return;
     }
-
-    if (sceneChanged) {
-      this.emit({ type: 'scene-change', sceneId: next.sceneId });
+    if (document.hidden || !this.inView) {
+      this.pauseForVisibility();
+      return;
     }
-    if (stepChanged) {
-      this.emit({
-        type: 'step-change',
-        stepIndex: next.stepIndex,
-        stepId: this.step().id,
-      });
-    }
-    if (moduleChanged) {
-      this.emit({ type: 'module-select', moduleId: next.moduleId });
-    }
-    if (options.writeHash !== false) {
+    const delta = Math.min(0.25, Math.max(0, (now - this.lastFrame) / 1000));
+    this.lastFrame = now;
+    this.clock.advance(delta);
+    const playback = this.readPlayback();
+    const previousStep = this.stateValue.stepIndex;
+    this.stateValue = {
+      ...this.stateValue,
+      stepIndex: playback.stepIndex,
+      playing: playback.playing,
+    };
+    if (previousStep !== playback.stepIndex) {
+      this.emitStepChange();
       this.writeHash();
     }
-    if (options.focusSelector) {
-      this.restoreFocus(options.focusSelector);
+    this.syncAllStages(false, playback);
+    if (
+      now - this.lastPublish >= 90 ||
+      previousStep !== playback.stepIndex ||
+      !playback.playing
+    ) {
+      this.lastPublish = now;
+      this.publish();
     }
-    this.syncPlaybackTimer();
-  }
-
-  private refreshScene(): void {
-    const scene = this.scene();
-    const key = `${scene.id}:${this.stateValue.sceneId}:${this.stateValue.laneMode}:${this.reducedMotion}:${this.webglSupported}`;
-    if (key !== this.viewKey) {
-      this.viewKey = key;
-      this.rebuildStages();
+    if (playback.playing) {
+      this.frameId = requestAnimationFrame(this.tick);
     }
-    this.renderChrome();
-    this.renderTransport();
-    this.renderGuide();
-    this.renderDossier();
-    this.renderLower();
-    this.renderFoot();
-    this.syncStages();
-    this.updateLaneFoots();
-    this.captionEl.textContent = scene.instructions ?? '';
-    this.liveEl.textContent = `第 ${this.stateValue.stepIndex + 1} 步，共 ${this.scenario().steps.length} 步：${this.step().title}`;
-  }
+  };
 
-  private rebuildStages(): void {
-    this.disposeStages();
-    const scene = this.scene();
-    const lanes = this.lanesForView();
-    this.lanesEl.innerHTML = lanes
-      .map((lane) => this.laneMarkup(lane, scene))
-      .join('');
-    this.lanesEl.dataset.count = String(lanes.length);
-    this.root.dataset.compare = String(scene.mode === 'compare');
-    this.root.dataset.lanes = String(lanes.length);
-
-    for (const lane of lanes) {
-      const host = this.lanesEl.querySelector<HTMLElement>(
-        `[data-lane-host="${this.cssEscape(lane.id)}"]`,
-      );
-      const foot = this.lanesEl.querySelector<HTMLElement>(
-        `[data-lane-foot="${this.cssEscape(lane.id)}"]`,
-      );
-      if (!host) {
-        continue;
+  private syncAllStages(force = false, playback = this.readPlayback()): void {
+    const lanes = new Map(
+      this.lanesForView().map((lane) => [lane.id, lane] as const),
+    );
+    for (const [laneId, stage] of this.stageViews) {
+      const lane = lanes.get(laneId);
+      if (lane) {
+        this.syncStage(lane, stage, force, playback);
       }
-      if (foot) {
-        this.laneFoots.set(lane.id, foot);
-      }
-      this.buildLaneStage(lane, host);
     }
-    this.root.dataset.viewKey = this.viewKey;
   }
 
-  private buildLaneStage(lane: LaneDefinition, host: HTMLElement): void {
-    const scene = this.scene();
-    if (!this.webglSupported) {
-      this.buildFallback(
-        lane,
-        host,
-        this.options.fallbackOnNoWebGL === false
-          ? '按配置未启用 WebGL 自动降级；三维视图不可用，以下保留文本阅读。'
-          : FALLBACK_HINT,
-      );
+  private syncStage(
+    lane: LaneDefinition,
+    stage: StageView,
+    force: boolean,
+    playback = this.readPlayback(),
+  ): void {
+    const scenario = this.scenario();
+    const step = scenario.steps[playback.stepIndex] ?? scenario.steps[0];
+    if (!step) {
       return;
     }
-    let handle;
-    try {
-      handle = scene.buildLane({
-        lane,
-        scene,
-        laneIndex: scene.lanes.findIndex((candidate) => candidate.id === lane.id),
-        laneCount: this.lanesForView().length,
-        reducedMotion: this.reducedMotion,
-      });
-      const stage = new StageView(host, {
-        lane,
-        handle,
-        reducedMotion: this.reducedMotion,
-        onCameraChange: (pose) => {
-          for (const [otherId, other] of this.stageViews) {
-            if (otherId !== lane.id) other.setCameraPose(pose);
-          }
-        },
-        onSelect: (nodeId) => {
-          this.selectModule(nodeId);
-        },
-      });
-      this.stageViews.set(lane.id, stage);
-      const step = this.step();
+    const previousStep =
+      scenario.steps[Math.max(0, playback.stepIndex - 1)] ?? step;
+    const context: Omit<ScenePlaybackContext, 'lane' | 'reducedMotion'> = {
+      scenario,
+      step,
+      stepIndex: playback.stepIndex,
+      stepCount: scenario.steps.length,
+      previousStep,
+      progress: playback.progress,
+      time: playback.time,
+      playing: playback.playing,
+      options: this.stateValue.options,
+    };
+    const playbackStage = stage as PlaybackStage;
+    const sync = this.stageSync.get(lane.id);
+    if (typeof playbackStage.setPlayback === 'function') {
+      playbackStage.setPlayback(context);
+    } else if (force || !sync || sync.stepId !== step.id) {
       stage.setStep({
-        scenario: this.scenario(),
+        scenario,
         step,
-        stepIndex: this.stateValue.stepIndex,
-        stepCount: this.scenario().steps.length,
+        stepIndex: playback.stepIndex,
+        stepCount: scenario.steps.length,
       });
+    }
+    if (force || !sync || sync.stepId !== step.id) {
       stage.setActiveNodes(step.moduleIds);
+    }
+    if (force || !sync || sync.selected !== this.stateValue.moduleId) {
       stage.setSelected(this.stateValue.moduleId);
-      if (this.stateValue.moduleId) {
-        stage.focusNode(this.stateValue.moduleId);
-      }
-    } catch (error) {
-      handle?.dispose();
-      if (handle) {
-        disposeObject(handle.scene);
-      }
-      host.replaceChildren();
-      const reason =
-        error instanceof Error && error.message.includes('WebGL')
-          ? 'WebGL 初始化失败，三维视图不可用。'
-          : FALLBACK_HINT;
-      this.buildFallback(lane, host, reason);
     }
+    this.stageSync.set(lane.id, {
+      stepId: step.id,
+      selected: this.stateValue.moduleId,
+    });
   }
 
-  private buildFallback(lane: LaneDefinition, host: HTMLElement, hint: string): void {
-    const element = document.createElement('div');
-    element.className = 'imv-fallback';
-    element.dataset.fallbackLane = lane.id;
-    element.innerHTML = `<p class="imv-fallback__hint">${escapeHtml(hint)}</p>`;
-    host.append(element);
-    this.fallbacks.set(lane.id, element);
-    this.updateFallback(lane);
-  }
-
-  private updateFallback(lane: LaneDefinition): void {
-    const element = this.fallbacks.get(lane.id);
-    if (!element) {
-      return;
+  private destroyStage(laneId: string): void {
+    const stage = this.stageViews.get(laneId);
+    if (stage) {
+      stage.dispose();
     }
-    const step = this.step();
-    const modules = step.moduleIds
-      .map((id) => this.pack.modules[id])
-      .filter(Boolean);
-    const points = step.points ?? [];
-    element.innerHTML = `
-      <div class="imv-fallback__head">
-        <span class="imv-kicker">NO WEBGL · 文本阅读</span>
-        <strong>${escapeHtml(step.title)}</strong>
-      </div>
-      <p class="imv-fallback__brief">${escapeHtml(step.summary)}</p>
-      ${
-        points.length
-          ? `<ul class="imv-fallback__points">${points
-              .map((point) => `<li>${escapeHtml(point)}</li>`)
-              .join('')}</ul>`
-          : ''
-      }
-      <p class="imv-fallback__note">${escapeHtml(lane.note)}</p>
-      <div class="imv-fallback__modules">
-        ${modules
-          .map(
-            (module) =>
-              `<button type="button" class="imv-chip" data-select-module="${escapeHtml(module.id)}" data-accent="${escapeHtml(module.accent)}">${escapeHtml(module.title)}</button>`,
-          )
-          .join('')}
-      </div>
-      <p class="imv-fallback__hint">${escapeHtml(
-        '三维结构不可用，但上方步骤、下方条件与模块索引仍然可操作。',
-      )}</p>`;
+    this.stageViews.delete(laneId);
+    this.stageKeys.delete(laneId);
+    this.stageSync.delete(laneId);
   }
 
   private disposeStages(): void {
-    for (const stage of this.stageViews.values()) {
-      stage.dispose();
+    for (const laneId of [...this.stageViews.keys()]) {
+      this.destroyStage(laneId);
     }
-    this.stageViews.clear();
-    this.laneFoots.clear();
-    this.fallbacks.clear();
+    this.stageSync.clear();
   }
 
-  private renderChrome(): void {
-    const scene = this.scene();
-    this.root.dataset.scene = scene.id;
-    this.root.dataset.mode = scene.mode;
-    this.navEl.innerHTML = this.pack.scenes
-      .map(
-        (candidate, index) => `
-          <button type="button" class="imv-nav__button" data-scene-id="${escapeHtml(candidate.id)}" aria-pressed="${candidate.id === scene.id}">
-            <span class="imv-nav__num">${String(index + 1).padStart(2, '0')}</span>
-            <span>${escapeHtml(candidate.navLabel)}</span>
-          </button>`,
-      )
-      .join('');
-    this.barMetaEl.innerHTML = `
-      <span class="imv-bar__flag">固定源码</span>
-      <span>审阅 ${escapeHtml(this.pack.reviewDate)}</span>
-      <span class="imv-bar__keys">← → 步进 · 空格 播放 · C 视角</span>`;
-
-    const provenance = scene.provenance;
-    const commits = provenance.commit
-      .split(/\s*\/\s*/)
-      .filter(Boolean)
-      .map((commit) =>
-        /^[0-9a-f]{7,40}$/i.test(commit)
-          ? externalLink(
-              `${provenance.repository}/tree/${commit}`,
-              `<code>${escapeHtml(commit.slice(0, 10))}</code>`,
-              'imv-commit__link',
-            )
-          : `<code>${escapeHtml(commit)}</code>`,
-      )
-      .join('<span class="imv-commit__sep">/</span>');
-    this.contextEl.innerHTML = `
-      <div class="imv-context__copy">
-        <p class="imv-kicker">${escapeHtml(scene.kicker)}</p>
-        <h2>${escapeHtml(scene.title)}</h2>
-        <p class="imv-description">${escapeHtml(scene.description)}</p>
-      </div>
-      <div class="imv-provenance">
-        <div class="imv-provenance__row">
-          <span>版本 / commit</span>
-          <div class="imv-commit">${commits}</div>
-        </div>
-        <div class="imv-provenance__row">
-          <span>${escapeHtml(provenance.label)}</span>
-          <p>${escapeHtml(provenance.scope)}</p>
-        </div>
-      </div>`;
-
-    const scenario = this.scenario();
-    const scenarioButtons =
-      scene.scenarios.length > 1
-        ? `<div class="imv-tools__group" role="group" aria-label="场景分支">
-            <span class="imv-tools__label">分支</span>
-            ${scene.scenarios
-              .map(
-                (candidate) => `
-                <button type="button" class="imv-tab" data-scenario-id="${escapeHtml(candidate.id)}" data-tone="${escapeHtml(candidate.id)}" aria-pressed="${candidate.id === scenario.id}">
-                  ${escapeHtml(candidate.label)}
-                </button>`,
-              )
-              .join('')}
-          </div>`
-        : '';
-    const laneOptions: Array<{ id: ViewerState['laneMode']; label: string }> =
-      scene.lanes.length > 1
-        ? [
-            { id: 'both', label: '双栏' },
-            ...scene.lanes.map((lane) => ({
-              id: (lane.id === 'v0520' ? 'left' : 'right') as ViewerState['laneMode'],
-              label: lane.version,
-            })),
-          ]
-        : [];
-    const laneButtons = laneOptions.length
-      ? `<div class="imv-tools__group" role="group" aria-label="版本视图">
-          <span class="imv-tools__label">视图</span>
-          ${laneOptions
-            .map(
-              (option) => `
-              <button type="button" class="imv-tab" data-lane-mode="${option.id}" aria-pressed="${option.id === this.stateValue.laneMode}">
-                ${escapeHtml(option.label)}
-              </button>`,
-            )
-            .join('')}
-        </div>`
-      : '';
-    const graphAssumption = scenario.conditions?.find(
-      (condition) => condition.id === 'graph-headroom',
-    );
-    this.toolsEl.innerHTML = `
-      <div class="imv-tools__left">
-        ${scenarioButtons}
-        ${laneButtons}
-        ${
-          graphAssumption
-            ? `<span class="imv-assumption" title="${escapeHtml(graphAssumption.detail)}">Graph 余量 · ${escapeHtml(conditionLabel(graphAssumption.status))}</span>`
-            : ''
-        }
-        ${
-          !scenarioButtons && !laneButtons
-            ? '<span class="imv-tools__hint">拖拽旋转 · 滚轮缩放 · 点击 3D 节点或标签查看模块档案</span>'
-            : ''
-        }
-      </div>
-      <div class="imv-tools__right">
-        <button type="button" class="imv-button imv-button--quiet" data-action="reset-camera">⌖ 视角复位</button>
-      </div>`;
-  }
-
-  private laneMarkup(lane: LaneDefinition, scene: SceneDefinition): string {
-    const commit = lane.commit
-      ? `${lane.commit.slice(0, 10)}`
-      : scene.provenance.shortCommit;
-    const commitLink = /^[0-9a-f]{7,40}$/i.test(lane.commit)
-      ? externalLink(
-          `${scene.provenance.repository}/tree/${lane.commit}`,
-          `<code>${escapeHtml(commit)}</code>`,
-          'imv-commit__link',
-        )
-      : `<code>${escapeHtml(commit)}</code>`;
-    const tone = lane.available ? 'available' : 'blocked';
-    return `
-      <article class="imv-lane" data-lane-id="${escapeHtml(lane.id)}" data-accent="${escapeHtml(lane.accent)}" data-available="${lane.available}">
-        <header class="imv-lane__head">
-          <div class="imv-lane__identity">
-            <span class="imv-lane__dot" aria-hidden="true"></span>
-            <div>
-              <h3>${escapeHtml(lane.label)}</h3>
-              <span class="imv-lane__version">${escapeHtml(lane.version)}</span>
-            </div>
-          </div>
-          <span class="imv-pill" data-tone="${tone}">${escapeHtml(lane.status)}</span>
-        </header>
-        <div class="imv-lane__meta">
-          ${commitLink}
-          <span>${escapeHtml(lane.note)}</span>
-        </div>
-        <div class="imv-lane__stage" data-lane-host="${escapeHtml(lane.id)}"></div>
-        <div class="imv-lane__foot">
-          <span data-lane-foot="${escapeHtml(lane.id)}"></span>
-          <button type="button" class="imv-lane__reset" data-action="reset-lane" data-lane-id="${escapeHtml(lane.id)}">视角</button>
-        </div>
-      </article>`;
-  }
-
-  private renderTransport(): void {
-    const scenario = this.scenario();
-    const step = this.step();
-    const canPlay = scenario.steps.length > 1;
-    this.transportEl.innerHTML = `
-      <div class="imv-transport__rail" role="group" aria-label="阅读步骤">
-        <button type="button" class="imv-stepnav" data-action="previous" aria-label="上一步" title="上一步（←）" ${this.stateValue.stepIndex === 0 ? 'disabled' : ''}>←</button>
-        <div class="imv-steps">
-          ${scenario.steps
-            .map(
-              (candidate, index) => `
-              <button type="button" class="imv-step" data-step-index="${index}" aria-pressed="${index === this.stateValue.stepIndex}" title="${escapeHtml(candidate.title)}">
-                <span class="imv-step__num">${String(index + 1).padStart(2, '0')}</span>
-                <span class="imv-step__label">${escapeHtml(candidate.label)}</span>
-              </button>`,
-            )
-            .join('')}
-        </div>
-        <button type="button" class="imv-stepnav" data-action="next" aria-label="下一步" title="下一步（→）" ${this.stateValue.stepIndex >= scenario.steps.length - 1 ? 'disabled' : ''}>→</button>
-      </div>
-      <div class="imv-transport__meta">
-        <span class="imv-step-count"><strong>${String(this.stateValue.stepIndex + 1).padStart(2, '0')}</strong> / ${String(scenario.steps.length).padStart(2, '0')} · ${escapeHtml(step.label)}</span>
-        <span class="imv-transport__note">步骤与镜头是阅读控制，不是实测耗时</span>
-        <div class="imv-transport__actions">
-          <button type="button" class="imv-button" data-action="play" ${canPlay ? '' : 'disabled'}>${this.stateValue.playing ? 'Ⅱ 暂停' : '▶ 播放'}</button>
-          <button type="button" class="imv-button imv-button--quiet" data-action="reset">重置</button>
-        </div>
-      </div>
-      <div class="imv-progress" aria-hidden="true"><span style="width:${((this.stateValue.stepIndex + 1) / scenario.steps.length) * 100}%"></span></div>`;
-  }
-
-  private renderGuide(): void {
-    const scenario = this.scenario();
-    const step = this.step();
-    const facts = scenario.steps.length
-      ? step.laneFacts
-        ? this.scene().lanes
-            .map((lane) => {
-              const fact = step.laneFacts?.[lane.id];
-              return fact ? { lane, fact } : null;
-            })
-            .filter((entry): entry is { lane: LaneDefinition; fact: LaneFact } =>
-              Boolean(entry),
-            )
-        : []
-      : [];
-    this.guideEl.innerHTML = `
-      <div class="imv-section-head">
-        <span class="imv-section-num">01</span>
-        <span>READING STEP</span>
-        <span class="imv-section-rule"></span>
-        <span>${escapeHtml(scenario.label)}</span>
-      </div>
-      <p class="imv-guide__kicker">第 ${String(this.stateValue.stepIndex + 1).padStart(2, '0')} 步 / ${String(scenario.steps.length).padStart(2, '0')}</p>
-      <h3 class="imv-guide__title">${escapeHtml(step.title)}</h3>
-      <p class="imv-guide__summary">${escapeHtml(step.summary)}</p>
-      ${
-        step.points?.length
-          ? `<ul class="imv-guide__points">${step.points
-              .map((point) => `<li>${escapeHtml(point)}</li>`)
-              .join('')}</ul>`
-          : ''
-      }
-      ${
-        facts.length
-          ? `<div class="imv-facts">${facts
-              .map(
-                ({ lane, fact }) => `
-                <div class="imv-fact" data-tone="${escapeHtml(fact.tone)}" data-lane="${escapeHtml(lane.id)}">
-                  <div class="imv-fact__head">
-                    <span class="imv-fact__lane">${escapeHtml(lane.version)}</span>
-                    <span class="imv-fact__status">${escapeHtml(fact.status)}</span>
-                  </div>
-                  <p>${escapeHtml(fact.detail)}</p>
-                </div>`,
-              )
-              .join('')}</div>`
-          : ''
-      }
-      ${scenario.note ? `<p class="imv-guide__note">${escapeHtml(scenario.note)}</p>` : ''}
-    `;
-  }
-
-  private renderDossier(): void {
-    const moduleId = this.stateValue.moduleId;
-    const module = moduleId ? this.pack.modules[moduleId] : undefined;
-    if (!module) {
-      const scene = this.scene();
-      const sceneModuleIds = new Set(moduleIdsForScene(scene));
-      this.dossierEl.innerHTML = `
-        <div class="imv-section-head">
-          <span class="imv-section-num">02</span>
-          <span>NODE DOSSIER</span>
-          <span class="imv-section-rule"></span>
-          <span>可下钻</span>
-        </div>
-        <h3 class="imv-dossier__empty-title">选一个节点，读它的边界</h3>
-        <p class="imv-dossier__empty-copy">
-          点击三维节点、场景标签，或下方“模块索引”。键盘可用 Tab 遍历，方向键在索引中移动。
-        </p>
-        <div class="imv-groupcards">
-          ${this.pack.groups
-            .map((group) => {
-              const count = Object.values(this.pack.modules).filter(
-                (candidate) =>
-                  candidate.groupId === group.id &&
-                  sceneModuleIds.has(candidate.id),
-              ).length;
-              return `
-                <div class="imv-groupcard" data-kind="${group.kind}">
-                  <span class="imv-groupcard__label">${escapeHtml(group.label)}</span>
-                  <span class="imv-groupcard__count">${count} 个节点</span>
-                  <p>${escapeHtml(group.detail)}</p>
-                </div>`;
-            })
-            .join('')}
-        </div>`;
-      return;
-    }
-    const group = this.pack.groups.find(
-      (candidate) => candidate.id === module.groupId,
-    );
-    this.dossierEl.innerHTML = `
-      <div class="imv-section-head">
-        <span class="imv-section-num">02</span>
-        <span>NODE DOSSIER</span>
-        <span class="imv-section-rule"></span>
-        <span>${escapeHtml(group?.label ?? '模块')}</span>
-      </div>
-      <div class="imv-dossier__title" data-accent="${escapeHtml(module.accent)}">
-        <span class="imv-orb" aria-hidden="true"></span>
-        <div>
-          <p class="imv-kicker">${escapeHtml(module.directory)}</p>
-          <h3>${escapeHtml(module.title)}</h3>
-          <code>${escapeHtml(module.name)}</code>
-        </div>
-        <button type="button" class="imv-close" data-clear-module aria-label="关闭节点档案">×</button>
-      </div>
-      <p class="imv-dossier__summary">${escapeHtml(module.summary)}</p>
-      <div class="imv-dossier__block">
-        <h4>为什么重要</h4>
-        <p>${escapeHtml(module.why)}</p>
-      </div>
-      <div class="imv-dossier__block">
-        <h4>源码行为</h4>
-        <p>${escapeHtml(module.action)}</p>
-      </div>
-      <div class="imv-dossier__block">
-        <h4>对象 / 数据</h4>
-        <ul>${module.objects.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
-      </div>
-      <div class="imv-dossier__block imv-dossier__block--boundary">
-        <h4>边界 / 别混淆</h4>
-        <ul>${module.boundaries.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
-      </div>
-      <div class="imv-dossier__block">
-        <h4>固定源码</h4>
-        ${this.sourceList(module.sourceIds, true)}
-      </div>`;
-  }
-
-  private renderLower(): void {
-    const scenario = this.scenario();
-    const conditions = scenario.conditions ?? [];
-    const changes = scenario.changes ?? [];
-    const step = this.step();
-    const stepSources = step.sourceIds ?? [];
-    const moduleSources = this.stateValue.moduleId
-      ? this.pack.modules[this.stateValue.moduleId]?.sourceIds ?? []
-      : [];
-    const sources = [...new Set([...stepSources, ...moduleSources])];
-    const sceneModuleIds = new Set(moduleIdsForScene(this.scene()));
-    const groupedModules = this.pack.groups
-      .map((group) => ({
-        group,
-        modules: Object.values(this.pack.modules).filter(
-          (module) =>
-            module.groupId === group.id && sceneModuleIds.has(module.id),
-        ),
-      }))
-      .filter((entry) => entry.modules.length > 0);
-
-    this.lowerEl.innerHTML = `
-      <div class="imv-lower__grid">
-        <section class="imv-panel">
-          <div class="imv-section-head">
-            <span class="imv-section-num">03</span>
-            <span>CONDITIONS</span>
-            <span class="imv-section-rule"></span>
-            <span>${conditions.length} 项</span>
-          </div>
-          ${
-            conditions.length
-              ? `<ol class="imv-conditions">${conditions
-                  .map(
-                    (condition) => `
-                    <li class="imv-condition" data-status="${escapeHtml(condition.status)}">
-                      <span class="imv-condition__glyph" aria-hidden="true">${conditionIcon(condition.status)}</span>
-                      <div>
-                        <strong>${escapeHtml(condition.label)}</strong>
-                        <span class="imv-condition__status">${escapeHtml(conditionLabel(condition.status))}</span>
-                        <p>${escapeHtml(condition.detail)}</p>
-                        ${condition.sourceIds ? this.sourceList(condition.sourceIds, false) : ''}
-                      </div>
-                    </li>`,
-                  )
-                  .join('')}</ol>`
-              : `<p class="imv-empty">这个场景没有额外的运行时门槛；它是结构阅读地图，不宣称一次真实请求的耗时。</p>`
-          }
-        </section>
-        <section class="imv-panel">
-          <div class="imv-section-head">
-            <span class="imv-section-num">04</span>
-            <span>VERSION DELTA</span>
-            <span class="imv-section-rule"></span>
-            <span>${changes.length ? `${changes.length} 项变化` : '单版本'}</span>
-          </div>
-          ${
-            changes.length
-              ? `<details class="imv-changes" ${this.scene().mode === 'compare' ? 'open' : ''}>
-                  <summary>对照变更模块与 before / after</summary>
-                  <div class="imv-changes__list">
-                    ${changes
-                      .map((change) => {
-                        const module = this.pack.modules[change.moduleId];
-                        return `
-                          <div class="imv-change" data-tone="${escapeHtml(change.tone)}">
-                            <button type="button" class="imv-change__module" data-select-module="${escapeHtml(change.moduleId)}">${escapeHtml(module?.title ?? change.label)}</button>
-                            <span class="imv-change__label">${escapeHtml(change.label)}</span>
-                            <div class="imv-change__states">
-                              <span><em>旧</em>${escapeHtml(change.oldState)}</span>
-                              <span><em>新</em>${escapeHtml(change.newState)}</span>
-                            </div>
-                          </div>`;
-                      })
-                      .join('')}
-                  </div>
-                </details>`
-              : `<p class="imv-empty">普通链路只使用一个固定源码基线；版本差异集中在“PD 角色切换”场景，不把主地图 commit 与前缀对比混用。</p>`
-          }
-        </section>
-        <section class="imv-panel imv-panel--modules">
-          <div class="imv-section-head">
-            <span class="imv-section-num">05</span>
-            <span>MODULE INDEX</span>
-            <span class="imv-section-rule"></span>
-            <span>${sceneModuleIds.size} 个模块</span>
-          </div>
-          <p class="imv-panel__hint">Tab 进入，方向键移动，Enter / Space 打开档案。</p>
-          <div class="imv-index">
-            ${groupedModules
-              .map(
-                ({ group, modules }) => `
-                <div class="imv-index__group">
-                  <h4>${escapeHtml(group.label)}</h4>
-                  <div class="imv-index__buttons">
-                    ${modules
-                      .map(
-                        (module) => `
-                        <button type="button" class="imv-module" data-select-module="${escapeHtml(module.id)}" data-accent="${escapeHtml(module.accent)}" aria-pressed="${module.id === this.stateValue.moduleId}" title="${escapeHtml(module.summary)}">
-                          <span class="imv-module__title">${escapeHtml(module.title)}</span>
-                          <span class="imv-module__name">${escapeHtml(module.name)}</span>
-                        </button>`,
-                      )
-                      .join('')}
-                  </div>
-                </div>`,
-              )
-              .join('')}
-          </div>
-        </section>
-        <section class="imv-panel">
-          <div class="imv-section-head">
-            <span class="imv-section-num">06</span>
-            <span>SOURCE EVIDENCE</span>
-            <span class="imv-section-rule"></span>
-            <span>${sources.length} 个锚点</span>
-          </div>
-          <p class="imv-panel__hint">当前步骤与选中模块的固定源码位置；只读静态核对，不运行 SGLang。</p>
-          ${this.sourceList(sources, true)}
-        </section>
-      </div>`;
-  }
-
-  private renderFoot(): void {
-    const notes = this.pack.notes.slice(0, 3);
-    this.footEl.innerHTML = `
-      <div class="imv-foot__mark">
-        <span>NOTICE</span>
-        <strong>${escapeHtml(this.pack.title)}</strong>
-      </div>
-      <ul class="imv-foot__notes">
-        ${notes.map((note) => `<li>${escapeHtml(note)}</li>`).join('')}
-      </ul>
-      <div class="imv-foot__legal">
-        <span>只读源码证据 · 非性能实测</span>
-        <span>MIT · Asher-XunZhang</span>
-        ${externalLink(
-          this.pack.repository,
-          'sgl-project/sglang ↗',
-          'imv-foot__link',
-        )}
-        ${externalLink(
-          this.pack.repository,
-          '仓库与证据说明 ↗',
-          'imv-foot__link',
-        )}
-      </div>`;
-  }
-
-  private sourceList(sourceIds: string[], detailed: boolean): string {
-    const anchors = sourceIds
-      .map((id) => this.pack.sourceAnchors[id])
-      .filter((anchor): anchor is NonNullable<typeof anchor> => Boolean(anchor));
-    if (!anchors.length) {
-      return '<p class="imv-empty imv-empty--small">本步没有单独列出的源码锚点。</p>';
-    }
-    if (!detailed) {
-      return `<div class="imv-source-inline">${anchors
-        .slice(0, 5)
-        .map(
-          (anchor) =>
-            externalLink(
-              sourceUrl(anchor),
-              escapeHtml(anchor.label),
-              'imv-source-link',
-            ),
-        )
-        .join('')}</div>`;
-    }
-    return `<ul class="imv-sources">${anchors
-      .map(
-        (anchor) => `
-        <li>
-          <div class="imv-source__head">
-            ${externalLink(
-              sourceUrl(anchor),
-              `<code>${escapeHtml(anchor.symbol)}</code>`,
-              'imv-source__symbol',
-            )}
-            <span>${escapeHtml(anchor.label)}</span>
-          </div>
-          <p>${escapeHtml(anchor.path)} · <code>${escapeHtml(anchor.commit.slice(0, 10))}</code></p>
-          ${anchor.note ? `<p class="imv-source__note">${escapeHtml(anchor.note)}</p>` : ''}
-        </li>`,
-      )
-      .join('')}</ul>`;
-  }
-
-  private syncStages(): void {
-    for (const stage of this.stageViews.values()) {
-      const step = this.step();
-      stage.setStep({
-        scenario: this.scenario(),
-        step,
-        stepIndex: this.stateValue.stepIndex,
-        stepCount: this.scenario().steps.length,
-      });
-      stage.setActiveNodes(step.moduleIds);
-      stage.setSelected(this.stateValue.moduleId);
-    }
-    for (const lane of this.lanesForView()) this.updateFallback(lane);
-  }
-
-  private updateLaneFoots(): void {
-    const step = this.step();
-    for (const lane of this.lanesForView()) {
-      const foot = this.laneFoots.get(lane.id);
-      if (!foot) {
-        continue;
-      }
-      const fact = step.laneFacts?.[lane.id];
-      const tone = fact?.tone ?? (lane.available ? 'available' : 'blocked');
-      const status = fact?.status ?? lane.status;
-      foot.innerHTML = `<span class="imv-lane__fact" data-tone="${escapeHtml(tone)}">${escapeHtml(status)}</span>`;
-      foot.title = fact?.detail ?? lane.note;
-    }
+  private emitStepChange(): void {
+    this.emit({
+      type: 'step-change',
+      stepIndex: this.stateValue.stepIndex,
+      stepId: this.scenario().steps[this.stateValue.stepIndex]?.id ?? '',
+    });
   }
 
   private writeHash(): void {
-    if (this.options.syncHash === false) {
+    if (this.options.syncHash === false || this.disposed) {
       return;
     }
     const next = serializeLocation(this.pack, this.stateValue);
@@ -1311,21 +834,15 @@ export class MechanismViewer implements MountedViewer {
     }
   }
 
-  private restoreFocus(selector: string): void {
-    window.requestAnimationFrame(() => {
-      if (this.disposed) {
-        return;
-      }
-      const target = this.shadow.querySelector<HTMLElement>(selector);
-      target?.focus({ preventScroll: true });
-    });
-  }
-
-  private cssEscape(value: string): string {
-    if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
-      return CSS.escape(value);
+  private emit(event: ViewerEvent): void {
+    if (this.disposed && event.type !== 'destroy') {
+      return;
     }
-    return value.replace(/["\\]/g, '\\$&');
+    try {
+      this.options.onEvent?.(event);
+    } catch {
+      // Consumer callbacks must not break the viewer lifecycle.
+    }
   }
 
   private scene(): SceneDefinition {
@@ -1336,38 +853,11 @@ export class MechanismViewer implements MountedViewer {
     return getScenario(this.scene(), this.stateValue.scenarioId);
   }
 
-  private step(): ViewerStep {
-    const scenario = this.scenario();
-    return scenario.steps[this.stateValue.stepIndex] ?? scenario.steps[0];
-  }
-
   private lanesForView(): LaneDefinition[] {
     const scene = this.scene();
-    const ids = visibleLaneIds(scene, this.stateValue.laneMode);
-    return ids
+    return visibleLaneIds(scene, this.stateValue.laneMode)
       .map((id) => scene.lanes.find((lane) => lane.id === id))
       .filter((lane): lane is LaneDefinition => Boolean(lane));
-  }
-
-  private emit(event: ViewerEvent): void {
-    try {
-      this.options.onEvent?.(event);
-    } catch {
-      // Consumer callbacks must not break the viewer lifecycle.
-    }
-  }
-}
-
-function conditionIcon(status: string): string {
-  switch (status) {
-    case 'pass':
-      return '✓';
-    case 'fail':
-      return '×';
-    case 'assumed':
-      return '≈';
-    default:
-      return '–';
   }
 }
 

@@ -45,11 +45,27 @@ export function laneModeForScene(scene: SceneDefinition, requested?: LaneMode): 
   return requested && LANE_MODES.includes(requested) ? requested : 'both';
 }
 
+export function resolvedSceneOptions(
+  scene: SceneDefinition,
+  requested?: Record<string, string>,
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const option of scene.options ?? []) {
+    const candidate = requested?.[option.id];
+    result[option.id] =
+      candidate && option.values.some((value) => value.id === candidate)
+        ? candidate
+        : option.defaultValue;
+  }
+  return result;
+}
+
 export function initialState(
   pack: ViewerPack,
   options: {
     initialSceneId?: string;
     initialLaneMode?: LaneMode;
+    initialOptions?: Record<string, string>;
     sceneId?: string;
     scenarioId?: string;
     stepIndex?: number;
@@ -81,6 +97,7 @@ export function initialState(
     stepIndex: clampIndex(requestedStep, stepCount),
     moduleId,
     playing: false,
+    options: resolvedSceneOptions(scene, options.initialOptions),
   };
 }
 
@@ -107,6 +124,10 @@ export function switchScene(
     stepIndex: 0,
     moduleId: null,
     playing: false,
+    options: resolvedSceneOptions(
+      scene,
+      state.sceneId === scene.id ? state.options : undefined,
+    ),
   };
 }
 
@@ -256,11 +277,16 @@ export function parseLocationHash(hash: string): ParsedLocation {
 export function stateFromLocation(
   pack: ViewerPack,
   parsed: ParsedLocation,
-  options: { initialSceneId?: string; initialLaneMode?: LaneMode } = {},
+  options: {
+    initialSceneId?: string;
+    initialLaneMode?: LaneMode;
+    initialOptions?: Record<string, string>;
+  } = {},
 ): ViewerState {
   return initialState(pack, {
     initialSceneId: options.initialSceneId,
     initialLaneMode: options.initialLaneMode,
+    initialOptions: options.initialOptions,
     sceneId: parsed.sceneId,
     scenarioId: parsed.scenarioId,
     stepIndex: parsed.stepIndex,

@@ -4,6 +4,7 @@ import type {
   FocusPoint,
   OverlayLabelSpec,
   SceneHandle,
+  ScenePlaybackContext,
   StepRenderContext,
 } from '../../../viewer/types';
 import {
@@ -760,6 +761,8 @@ export class SglangMapScene implements SceneHandle {
   private readonly mode: MapMode;
   private readonly reducedMotion: boolean;
   private readonly motion = new MotionRunner();
+  private playbackPathKey = '';
+  private playbackCurve: THREE.QuadraticBezierCurve3 | null = null;
   private readonly nodes = new Map<NodeId, NodeVisual>();
   private readonly links = new Map<
     string,
@@ -1018,6 +1021,42 @@ export class SglangMapScene implements SceneHandle {
     const immediate = !this.stepInitialized || scenarioChanged;
     this.stepInitialized = true;
     this.applyStep(context.step.id, immediate);
+  }
+
+  /** Exact reconstruction from reading time; never integrate from the last pose. */
+  setPlayback(context: ScenePlaybackContext): void {
+    this.motion.clear();
+    if (this.mode !== 'flow') {
+      this.applyStep('map', true);
+      return;
+    }
+    const progress = Math.max(0, Math.min(1, context.progress));
+    const before = context.previousStep.id;
+    const after = context.step.id;
+    this.currentStepId = progress < 1 ? before : after;
+    this.applyStep(this.currentStepId, true);
+    const pathKey = `${before}:${after}`;
+    if (pathKey !== this.playbackPathKey) {
+      this.playbackPathKey = pathKey;
+      const from = (requestPositions[before] ?? requestPositions.arrive).clone();
+      const to = (requestPositions[after] ?? requestPositions.arrive).clone();
+      const control = from.clone().add(to).multiplyScalar(0.5);
+      control.y = Math.max(from.y, to.y) + (from.distanceTo(to) > 0.1 ? 1.15 : 0);
+      this.playbackCurve = new THREE.QuadraticBezierCurve3(from, control, to);
+      this.requestPath.geometry.dispose();
+      this.requestPath.geometry = new THREE.BufferGeometry().setFromPoints(this.playbackCurve.getPoints(80));
+      this.requestPath.computeLineDistances();
+    }
+    if (this.playbackCurve) {
+      const eased = context.reducedMotion ? (progress < 1 ? 0 : 1) : progress * progress * (3 - 2 * progress);
+      this.requestGroup.position.copy(this.playbackCurve.getPoint(eased));
+      this.requestGroup.visible = after !== 'complete' || progress < 1;
+      this.requestGroup.scale.setScalar(after === 'complete' ? 1.15 * (1 - eased) : 1.15);
+    }
+    this.activeNodeIds = new Set(activeModulesByStep[after] ?? []);
+    this.refreshNodeStates();
+    this.updateLinks(after);
+    this.motion.clear();
   }
 
   setSelected(nodeId: string | null): void {

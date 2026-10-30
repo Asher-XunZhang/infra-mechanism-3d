@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { moduleDocs } from './modules';
-import { compareScenarios, pdLanes, requestFlowSceneData } from './scenarios';
+import { compareScenarios, mechanismSceneData, pdLanes, requestFlowSceneData } from './scenarios';
 import {
   MAIN_COMMIT,
   PD_NEW_COMMIT,
@@ -51,6 +51,24 @@ describe('SGLang source evidence contract', () => {
         expect(allSources[sourceId], `flow/${step.id} -> ${sourceId}`).toBeDefined();
       }
     }
+  });
+
+  it('wires the mechanism scene to its 28-step trace and fixed anchors', () => {
+    expect(mechanismSceneData.id).toBe('mechanism');
+    expect(mechanismSceneData.scenarios[0].steps).toHaveLength(28);
+    expect(mechanismSceneData.options?.[0].id).toBe('prefix');
+    for (const step of mechanismSceneData.scenarios[0].steps) {
+      for (const moduleId of step.moduleIds) {
+        expect(moduleDocs[moduleId], `mechanism/${step.id} -> ${moduleId}`).toBeDefined();
+      }
+      for (const sourceId of step.sourceIds ?? []) {
+        expect(allSources[sourceId], `mechanism/${step.id} -> ${sourceId}`).toBeDefined();
+      }
+    }
+    expect(allSources['mechanism.decode_prepare'].startLine).toBe(3470);
+    expect(allSources['mechanism.prefill_result'].startLine).toBe(358);
+    expect(allSources['mechanism.decode_result'].startLine).toBe(920);
+    expect(allSources['mechanism.cache_unfinished'].startLine).toBe(561);
   });
 
   it('keeps the old-side boundary exact and does not erase PD/PDMux', () => {

@@ -118,6 +118,7 @@ const baseState: ViewerState = {
   stepIndex: 0,
   moduleId: null,
   playing: false,
+  options: {},
 };
 
 describe('viewer state machine', () => {

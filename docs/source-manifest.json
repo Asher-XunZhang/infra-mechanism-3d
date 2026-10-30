@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "repository": "https://github.com/sgl-project/sglang",
-  "reviewed": "2026-10-29",
+  "reviewed": "2026-10-30",
   "scope": "Static source evidence only; not GPU execution or performance validation.",
   "files": [
     {
@@ -57,6 +57,14 @@
         {
           "line": 2678,
           "text": "def prepare_for_extend"
+        },
+        {
+          "line": 3470,
+          "text": "def prepare_for_decode"
+        },
+        {
+          "line": 3510,
+          "text": "self.out_cache_loc = alloc_for_decode"
         }
       ]
     },
@@ -68,6 +76,18 @@
         {
           "line": 257,
           "text": "def process_batch_result_prefill"
+        },
+        {
+          "line": 358,
+          "text": "req.output_ids.append(next_token_id)"
+        },
+        {
+          "line": 383,
+          "text": "maybe_cache_unfinished_req(req, self.tree_cache)"
+        },
+        {
+          "line": 920,
+          "text": "def process_batch_result_decode"
         }
       ]
     },
@@ -129,6 +149,10 @@
         {
           "line": 557,
           "text": "# Remove req slot release the cache lock"
+        },
+        {
+          "line": 561,
+          "text": "def cache_unfinished_req"
         }
       ]
     },

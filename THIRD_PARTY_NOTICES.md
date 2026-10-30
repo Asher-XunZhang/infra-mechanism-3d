@@ -1,5 +1,9 @@
 # Third-party notices
 
+## React
+
+React, React DOM, and Scheduler are distributed under the MIT License, copyright Meta Platforms, Inc. and affiliates. Exact versions are pinned in `package-lock.json`. Their notices are included in [React](LICENSES/React-MIT.txt), [React DOM](LICENSES/ReactDOM-MIT.txt), and [Scheduler](LICENSES/Scheduler-MIT.txt). React manages the reader interface; the mechanism model and reading clock remain independent TypeScript modules.
+
 ## Three.js
 
 Three.js 0.186.1, including OrbitControls and RoundedBoxGeometry, is used under the MIT License. Copyright © 2010–2026 three.js authors. See [LICENSES/Three-MIT.txt](LICENSES/Three-MIT.txt) for the distributed permission notice and [the project](https://github.com/mrdoob/three.js).
